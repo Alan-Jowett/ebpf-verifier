@@ -33,7 +33,7 @@ jobs:
       - name: Build
         run: |
           mkdir build
-          cmake -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_CONFIGURATION}} -DCMAKE_CXX_FLAGS="--coverage -g"
+          cmake -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_CONFIGURATION}} -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage -g"
           cmake --build build -j $(nproc)
 
       - name: Run unit tests
@@ -42,7 +42,7 @@ jobs:
       - name: Generate code coverage report
         run: |
           cd build
-          gcovr -r .. -e ../external/ -e src/test --cobertura ../ebpf-verifier.xml --gcov-ignore-parse-errors --exclude-unreachable-branches
+          gcovr -r .. -e '../external/.*' -e '../src/test/.*' --cobertura ../ebpf-verifier.xml --gcov-ignore-parse-errors --exclude-unreachable-branches
 
       - name: Upload Report to Codecov
         uses: codecov/codecov-action@81cd2dc8148241f03f5839d295e000b8f761e378
