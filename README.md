@@ -1,4 +1,4 @@
-[![Coverage Status](https://coveralls.io/repos/github/Alan-Jowett/ebpf-verifier/badge.svg)](https://coveralls.io/github/Alan-Jowett/ebpf-verifier)
+[![Coverage Status](https://coveralls.io/repos/github/Alan-Jowett/ebpf-verifier/badge.svg?branch=main)](https://coveralls.io/github/Alan-Jowett/ebpf-verifier?branch=main)
 
 # PREVAIL
 ## a Polynomial-Runtime EBPF Verifier using an Abstract Interpretation Layer
