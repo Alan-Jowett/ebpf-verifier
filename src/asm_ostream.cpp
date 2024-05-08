@@ -56,11 +56,16 @@ std::ostream& operator<<(std::ostream& os, Bin::Op op) {
     using Op = Bin::Op;
     switch (op) {
     case Op::MOV: return os;
+    case Op::MOVSX8: return os << "s8";
+    case Op::MOVSX16: return os << "s16";
+    case Op::MOVSX32: return os << "s32";
     case Op::ADD: return os << "+";
     case Op::SUB: return os << "-";
     case Op::MUL: return os << "*";
     case Op::UDIV: return os << "/";
+    case Op::SDIV: return os << "s/";
     case Op::UMOD: return os << "%";
+    case Op::SMOD: return os << "s%";
     case Op::OR: return os << "|";
     case Op::AND: return os << "&";
     case Op::LSH: return os << "<<";
@@ -184,6 +189,10 @@ std::ostream& operator<<(std::ostream& os, TypeConstraint const& tc) {
     return os << typereg(tc.reg) << " " << cmp_op << " " << tc.types;
 }
 
+std::ostream& operator<<(std::ostream& os, FuncConstraint const& fc) {
+    return os << typereg(fc.reg) << " is helper";
+}
+
 std::ostream& operator<<(std::ostream& os, AssertionConstraint const& a) {
     return std::visit([&](const auto& a) -> std::ostream& { return os << a; }, a);
 }
@@ -219,6 +228,9 @@ struct InstructionPrinterVisitor {
         case Un::Op::LE16: os_ << "le16 "; break;
         case Un::Op::LE32: os_ << "le32 "; break;
         case Un::Op::LE64: os_ << "le64 "; break;
+        case Un::Op::SWAP16: os_ << "swap16 "; break;
+        case Un::Op::SWAP32: os_ << "swap32 "; break;
+        case Un::Op::SWAP64: os_ << "swap64 "; break;
         case Un::Op::NEG: os_ << "-"; break;
         }
         os_ << b.dst;
@@ -253,6 +265,8 @@ struct InstructionPrinterVisitor {
         }
         os_ << ")";
     }
+
+    void operator()(Callx const& callx) { os_ << "callx " << callx.func; }
 
     void operator()(Exit const& b) { os_ << "exit"; }
 
@@ -314,10 +328,24 @@ struct InstructionPrinterVisitor {
         }
     }
 
-    void operator()(LockAdd const& b) {
+    void operator()(Atomic const& b) {
         os_ << "lock ";
         print(b.access);
-        os_ << " += " << b.valreg;
+        os_ << " ";
+        bool showfetch = true;
+        switch (b.op) {
+        case Atomic::Op::ADD: os_ << "+"; break;
+        case Atomic::Op::OR : os_ << "|"; break;
+        case Atomic::Op::AND: os_ << "&"; break;
+        case Atomic::Op::XOR: os_ << "^"; break;
+        case Atomic::Op::XCHG: os_ << "x"; showfetch = false; break;
+        case Atomic::Op::CMPXCHG: os_ << "cx"; showfetch = false; break;
+        }
+        os_ << "= " << b.valreg;
+
+        if (showfetch && b.fetch) {
+            os_ << " fetch";
+        }
     }
 
     void operator()(Assume const& b) {
@@ -329,6 +357,9 @@ struct InstructionPrinterVisitor {
         os_ << "assert " << a.cst;
     }
 
+    void operator()(IncrementLoopCounter const& a) {
+        os_ << crab::variable_t::loop_counter(to_string(a.name)) << "++";
+    }
 };
 
 string to_string(label_t const& label) {

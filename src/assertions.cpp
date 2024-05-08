@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "asm_syntax.hpp"
-#include "ebpf_vm_isa.hpp"
 #include "platform.hpp"
 #include "crab/cfg.hpp"
 
@@ -38,6 +37,8 @@ class AssertExtractor {
     vector<Assert> operator()(Undefined const& ins) const { assert(false); return {}; }
 
     vector<Assert> operator()(Assert const& ins) const { assert(false); return {}; }
+
+    vector<Assert> operator()(IncrementLoopCounter ins) const { assert(false); return {}; }
 
     vector<Assert> operator()(LoadMapFd const& ins) const { return {}; }
 
@@ -104,6 +105,13 @@ class AssertExtractor {
         return res;
     }
 
+    vector<Assert> operator()(Callx const& callx) const {
+        vector<Assert> res;
+        res.emplace_back(TypeConstraint{callx.func, TypeGroup::number});
+        res.emplace_back(FuncConstraint{callx.func});
+        return res;
+    }
+
     [[nodiscard]]
     vector<Assert> explicate(Condition cond) const {
         if (info.type.is_privileged)
@@ -162,11 +170,17 @@ class AssertExtractor {
         return res;
     }
 
-    vector<Assert> operator()(LockAdd ins) const {
+    vector<Assert> operator()(Atomic ins) const {
         vector<Assert> res;
-        res.emplace_back(TypeConstraint{ins.access.basereg, TypeGroup::shared});
+        res.emplace_back(TypeConstraint{ins.access.basereg, TypeGroup::pointer});
         res.emplace_back(ValidAccess{ins.access.basereg, ins.access.offset,
                                      Imm{static_cast<uint32_t>(ins.access.width)}, false});
+        if (ins.op == Atomic::Op::CMPXCHG) {
+            // The memory contents pointed to by ins.access will be compared
+            // against the value of the ins.valreg register.  Only numbers are
+            // supported.
+            res.emplace_back(TypeConstraint{ins.valreg, TypeGroup::number});
+        }
         return res;
     }
 
@@ -179,6 +193,14 @@ class AssertExtractor {
     vector<Assert> operator()(Bin ins) const {
         switch (ins.op) {
         case Bin::Op::MOV: return {};
+        case Bin::Op::MOVSX8:
+        case Bin::Op::MOVSX16:
+        case Bin::Op::MOVSX32:
+            if (std::holds_alternative<Reg>(ins.v)) {
+                auto src = reg(ins.v);
+                return {Assert{TypeConstraint{src, TypeGroup::number}}};
+            }
+            return {};
         case Bin::Op::ADD:
             if (std::holds_alternative<Reg>(ins.v)) {
                 auto src = reg(ins.v);
@@ -208,9 +230,12 @@ class AssertExtractor {
             }
         case Bin::Op::UDIV:
         case Bin::Op::UMOD:
+        case Bin::Op::SDIV:
+        case Bin::Op::SMOD:
             if (std::holds_alternative<Reg>(ins.v)) {
                 auto src = reg(ins.v);
-                return {Assert{TypeConstraint{ins.dst, TypeGroup::number}}, Assert{ValidDivisor{src}}};
+                bool is_signed = (ins.op == Bin::Op::SDIV || ins.op == Bin::Op::SMOD);
+                return {Assert{TypeConstraint{ins.dst, TypeGroup::number}}, Assert{ValidDivisor{src, is_signed}}};
             } else {
                 return {Assert{TypeConstraint{ins.dst, TypeGroup::number}}};
             }
@@ -222,6 +247,10 @@ class AssertExtractor {
     }
 };
 
+vector<Assert> get_assertions(Instruction ins, const program_info& info) {
+    return std::visit(AssertExtractor{info}, ins);
+}
+
 /// Annotate the CFG by adding explicit assertions for all the preconditions
 /// of any instruction. For example, jump instructions are asserted not to
 /// compare numbers and pointers, or pointers to potentially distinct memory
@@ -232,7 +261,7 @@ void explicate_assertions(cfg_t& cfg, const program_info& info) {
         (void)label; // unused
         vector<Instruction> insts;
         for (const auto& ins : vector<Instruction>(bb.begin(), bb.end())) {
-            for (auto a : std::visit(AssertExtractor{info}, ins))
+            for (auto a : get_assertions(ins, info))
                 insts.emplace_back(a);
             insts.push_back(ins);
         }

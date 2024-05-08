@@ -7,7 +7,7 @@ include(FetchContent)
 FetchContent_Declare(
   Catch2
   GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-  GIT_TAG        ac93f1943762f6fc92f0dc5bac0d720a33a27530
+  GIT_TAG        05e10dfccc28c7f973727c54f850237d07d5e10f # v3.5.2
 )
 FetchContent_MakeAvailable(Catch2)
 
@@ -30,14 +30,14 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
       FORCE)
   set(CMAKE_EXE_LINKER_FLAGS_FUZZERDEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG}")
   set(CMAKE_SHARED_LINKER_FLAGS_FUZZERDEBUG "${CMAKE_SHARED_LINKER_FLAGS_DEBUG}")
-  set(CMAKE_C_FLAGS_FUZZERDEBUG "${CMAKE_C_FLAGS_DEBUG} /fsanitize-coverage=inline-bool-flag /fsanitize-coverage=edge /fsanitize-coverage=trace-cmp /fsanitize-coverage=trace-div /ZH:SHA_256")
-  set(CMAKE_CXX_FLAGS_FUZZERDEBUG "${CMAKE_CXX_FLAGS_DEBUG} /fsanitize-coverage=inline-bool-flag /fsanitize-coverage=edge /fsanitize-coverage=trace-cmp /fsanitize-coverage=trace-div /ZH:SHA_256")
+  set(CMAKE_C_FLAGS_FUZZERDEBUG "${CMAKE_C_FLAGS_DEBUG} /fsanitize=address /fsanitize=fuzzer /fsanitize-coverage=inline-bool-flag /fsanitize-coverage=edge /fsanitize-coverage=trace-cmp /fsanitize-coverage=trace-div /ZH:SHA_256")
+  set(CMAKE_CXX_FLAGS_FUZZERDEBUG "${CMAKE_CXX_FLAGS_DEBUG} /fsanitize=address /fsanitize=fuzzer /fsanitize-coverage=inline-bool-flag /fsanitize-coverage=edge /fsanitize-coverage=trace-cmp /fsanitize-coverage=trace-div /ZH:SHA_256")
 
   find_program(NUGET nuget)
   if (NOT NUGET)
     message("ERROR: You must first install nuget.exe from https://www.nuget.org/downloads")
   else ()
-    exec_program(${NUGET} ARGS install "Boost" -Version 1.81.0 -ExcludeVersion -OutputDirectory ${CMAKE_BINARY_DIR}/packages)
+    execute_process(COMMAND ${NUGET} install "Boost" -Version 1.81.0 -ExcludeVersion -OutputDirectory ${CMAKE_BINARY_DIR}/packages)
     set(BOOST_VERSION 1.81.0)
   endif()
   set(Boost_INCLUDE_DIRS ${CMAKE_BINARY_DIR}/packages/boost/lib/native/include)
@@ -62,7 +62,7 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
 endif ()
 
 include_directories(./external)
-include_directories(./external/ELFIO)
+include_directories(./external/bpf_conformance/external/elfio)
 include_directories(./src)
 include_directories(./external/libbtf)
 include_directories(${Boost_INCLUDE_DIRS})
@@ -80,10 +80,8 @@ file(GLOB LIB_SRC
 file(GLOB ALL_TEST
         "./src/test/test.cpp"
         "./src/test/test_conformance.cpp"
-        "./src/test/test_loop.cpp"
         "./src/test/test_marshal.cpp"
         "./src/test/test_print.cpp"
-        "./src/test/test_termination.cpp"
         "./src/test/test_verify.cpp"
         "./src/test/test_wto.cpp"
         "./src/test/test_yaml.cpp"
@@ -93,7 +91,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" OR
     "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
   set(COMMON_FLAGS -Wall -Wfatal-errors -DSIZEOF_VOID_P=8 -DSIZEOF_LONG=8)
 
-  set(RELEASE_FLAGS -O2 -flto -ffat-lto-objects)
+  set(RELEASE_FLAGS -O2 -flto=auto -ffat-lto-objects)
 
   set(DEBUG_FLAGS -O0 -g3 -fno-omit-frame-pointer)
 
@@ -132,6 +130,7 @@ target_compile_options(ebpfverifier PUBLIC "$<$<CONFIG:DEBUG>:${DEBUG_FLAGS}>")
 target_compile_options(ebpfverifier PUBLIC "$<$<CONFIG:RELEASE>:${RELEASE_FLAGS}>")
 target_compile_options(ebpfverifier PUBLIC "$<$<CONFIG:SANITIZE>:${SANITIZE_FLAGS}>")
 
+add_subdirectory("external/bpf_conformance/external/elfio")
 add_subdirectory("external/bpf_conformance/src")
 add_subdirectory("external/libbtf")
 

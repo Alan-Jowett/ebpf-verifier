@@ -12,9 +12,10 @@ void test_conformance(std::string filename, bpf_conformance_test_result_t expect
     boost::filesystem::path extension = test_path.extension();
     std::filesystem::path plugin_path =
         test_path.remove_filename().append("conformance_check" + extension.string()).string();
-    std::map<std::filesystem::path, std::tuple<bpf_conformance_test_result_t, std::string>> result =
-        bpf_conformance(test_files, plugin_path, {}, {}, {}, bpf_conformance_test_CPU_version_t::v3,
-                        bpf_conformance_list_instructions_t::LIST_INSTRUCTIONS_NONE, true);
+    std::map<std::filesystem::path, std::tuple<bpf_conformance_test_result_t, std::string>> result = bpf_conformance(
+        test_files, plugin_path, {}, {}, {}, bpf_conformance_test_CPU_version_t::v4,
+        bpf_conformance_groups_t::default_groups | bpf_conformance_groups_t::callx,
+        bpf_conformance_list_instructions_t::LIST_INSTRUCTIONS_NONE, true);
     for (auto file : test_files) {
         auto& [file_result, reason] = result[file];
         REQUIRE(file_result == expected_result);
@@ -34,21 +35,21 @@ void test_conformance(std::string filename, bpf_conformance_test_result_t expect
 // legitimate programs from being usable.
 #define TEST_CONFORMANCE_VERIFICATION_FAILED(filename) \
     TEST_CASE("conformance_check " filename, "[conformance]") { \
-        test_conformance(filename, bpf_conformance_test_result_t::TEST_RESULT_FAIL, "Verification failed"); \
+        test_conformance(filename, bpf_conformance_test_result_t::TEST_RESULT_ERROR, "Verification failed"); \
     }
 
 // Any tests that return top are safe, but are not as precise as they
 // could be and so may prevent legitimate programs from being usable.
 #define TEST_CONFORMANCE_TOP(filename) \
     TEST_CASE("conformance_check " filename, "[conformance]") { \
-        test_conformance(filename, bpf_conformance_test_result_t::TEST_RESULT_FAIL, "Couldn't determine r0 value"); \
+        test_conformance(filename, bpf_conformance_test_result_t::TEST_RESULT_ERROR, "Couldn't determine r0 value"); \
     }
 
 // Any tests that return a range are safe, but are not as precise as they
 // could be and so may prevent legitimate programs from being usable.
 #define TEST_CONFORMANCE_RANGE(filename, range)                                                                  \
     TEST_CASE("conformance_check " filename, "[conformance]") {                                                  \
-        test_conformance(filename, bpf_conformance_test_result_t::TEST_RESULT_FAIL, "r0 value is range " range); \
+        test_conformance(filename, bpf_conformance_test_result_t::TEST_RESULT_ERROR, "r0 value is range " range); \
     }
 
 TEST_CONFORMANCE("add.data")
@@ -74,8 +75,11 @@ TEST_CONFORMANCE("be16.data")
 TEST_CONFORMANCE("be32-high.data")
 TEST_CONFORMANCE("be32.data")
 TEST_CONFORMANCE("be64.data")
+TEST_CONFORMANCE_VERIFICATION_FAILED("call_local.data")
 TEST_CONFORMANCE("call_unwind_fail.data")
-TEST_CONFORMANCE("div-by-zero-reg.data")
+TEST_CONFORMANCE("callx.data")
+TEST_CONFORMANCE("div32-by-zero-reg.data")
+TEST_CONFORMANCE("div32-by-zero-reg-2.data")
 TEST_CONFORMANCE("div32-high-divisor.data")
 TEST_CONFORMANCE("div32-imm.data")
 TEST_CONFORMANCE("div32-reg.data")
@@ -86,11 +90,14 @@ TEST_CONFORMANCE("div64-negative-reg.data")
 TEST_CONFORMANCE("div64-reg.data")
 TEST_CONFORMANCE("exit-not-last.data")
 TEST_CONFORMANCE("exit.data")
+TEST_CONFORMANCE("j-signed-imm.data")
+TEST_CONFORMANCE("ja32.data")
 TEST_CONFORMANCE("jeq-imm.data")
 TEST_CONFORMANCE("jeq-reg.data")
 TEST_CONFORMANCE("jeq32-imm.data")
 TEST_CONFORMANCE("jeq32-reg.data")
 TEST_CONFORMANCE("jge-imm.data")
+TEST_CONFORMANCE("jge-reg.data")
 TEST_CONFORMANCE("jge32-imm.data")
 TEST_CONFORMANCE("jge32-reg.data")
 TEST_CONFORMANCE("jgt-imm.data")
@@ -143,18 +150,26 @@ TEST_CONFORMANCE("ldxw.data")
 TEST_CONFORMANCE("le16.data")
 TEST_CONFORMANCE("le32.data")
 TEST_CONFORMANCE("le64.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_add.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_add32.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_and.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_and32.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_cmpxchg.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_cmpxchg32.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_or.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_or32.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_xchg.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_xchg32.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_xor.data")
-TEST_CONFORMANCE_VERIFICATION_FAILED("lock_xor32.data")
+TEST_CONFORMANCE("lock_add.data")
+TEST_CONFORMANCE_RANGE("lock_add32.data", "[0, 1311768467463790321]")
+TEST_CONFORMANCE("lock_and.data")
+TEST_CONFORMANCE_TOP("lock_and32.data")
+TEST_CONFORMANCE_TOP("lock_cmpxchg.data")
+TEST_CONFORMANCE_TOP("lock_cmpxchg32.data")
+TEST_CONFORMANCE("lock_fetch_add.data")
+TEST_CONFORMANCE_RANGE("lock_fetch_add32.data", "[0, 1311768467463790321]")
+TEST_CONFORMANCE("lock_fetch_and.data")
+TEST_CONFORMANCE_TOP("lock_fetch_and32.data")
+TEST_CONFORMANCE("lock_fetch_or.data")
+TEST_CONFORMANCE_TOP("lock_fetch_or32.data")
+TEST_CONFORMANCE("lock_fetch_xor.data")
+TEST_CONFORMANCE_TOP("lock_fetch_xor32.data")
+TEST_CONFORMANCE("lock_or.data")
+TEST_CONFORMANCE_TOP("lock_or32.data")
+TEST_CONFORMANCE("lock_xchg.data")
+TEST_CONFORMANCE("lock_xchg32.data")
+TEST_CONFORMANCE("lock_xor.data")
+TEST_CONFORMANCE_TOP("lock_xor32.data")
 TEST_CONFORMANCE("lsh32-imm.data")
 TEST_CONFORMANCE("lsh32-imm-high.data")
 TEST_CONFORMANCE("lsh32-imm-neg.data")
@@ -175,6 +190,11 @@ TEST_CONFORMANCE("mod64-by-zero-reg.data")
 TEST_CONFORMANCE("mod64.data")
 TEST_CONFORMANCE("mov.data")
 TEST_CONFORMANCE("mov64-sign-extend.data")
+TEST_CONFORMANCE("movsx1632-reg.data")
+TEST_CONFORMANCE("movsx1664-reg.data")
+TEST_CONFORMANCE("movsx3264-reg.data")
+TEST_CONFORMANCE("movsx832-reg.data")
+TEST_CONFORMANCE("movsx864-reg.data")
 TEST_CONFORMANCE("mul32-imm.data")
 TEST_CONFORMANCE("mul32-reg-overflow.data")
 TEST_CONFORMANCE("mul32-reg.data")
@@ -195,6 +215,30 @@ TEST_CONFORMANCE("rsh64-imm-neg.data")
 TEST_CONFORMANCE("rsh64-reg.data")
 TEST_CONFORMANCE("rsh64-reg-high.data")
 TEST_CONFORMANCE("rsh64-reg-neg.data")
+TEST_CONFORMANCE("sdiv32-by-zero-imm.data")
+TEST_CONFORMANCE("sdiv32-by-zero-reg.data")
+TEST_CONFORMANCE("sdiv32-imm.data")
+TEST_CONFORMANCE("sdiv32-reg.data")
+TEST_CONFORMANCE("sdiv64-by-zero-imm.data")
+TEST_CONFORMANCE("sdiv64-by-zero-reg.data")
+TEST_CONFORMANCE("sdiv64-imm.data")
+TEST_CONFORMANCE("sdiv64-reg.data")
+TEST_CONFORMANCE("smod32-neg-by-neg-imm.data")
+TEST_CONFORMANCE("smod32-neg-by-neg-reg.data")
+TEST_CONFORMANCE("smod32-neg-by-pos-imm.data")
+TEST_CONFORMANCE("smod32-neg-by-pos-reg.data")
+TEST_CONFORMANCE("smod32-neg-by-zero-imm.data")
+TEST_CONFORMANCE("smod32-neg-by-zero-reg.data")
+TEST_CONFORMANCE("smod32-pos-by-neg-imm.data")
+TEST_CONFORMANCE("smod32-pos-by-neg-reg.data")
+TEST_CONFORMANCE("smod64-neg-by-neg-imm.data")
+TEST_CONFORMANCE("smod64-neg-by-neg-reg.data")
+TEST_CONFORMANCE("smod64-neg-by-pos-imm.data")
+TEST_CONFORMANCE("smod64-neg-by-pos-reg.data")
+TEST_CONFORMANCE("smod64-neg-by-zero-imm.data")
+TEST_CONFORMANCE("smod64-neg-by-zero-reg.data")
+TEST_CONFORMANCE("smod64-pos-by-neg-imm.data")
+TEST_CONFORMANCE("smod64-pos-by-neg-reg.data")
 TEST_CONFORMANCE("stack.data")
 TEST_CONFORMANCE("stb.data")
 TEST_CONFORMANCE("stdw.data")
@@ -207,4 +251,7 @@ TEST_CONFORMANCE("stxb.data")
 TEST_CONFORMANCE("stxdw.data")
 TEST_CONFORMANCE("stxh.data")
 TEST_CONFORMANCE("stxw.data")
+TEST_CONFORMANCE("swap16.data")
+TEST_CONFORMANCE("swap32.data")
+TEST_CONFORMANCE("swap64.data")
 TEST_CONFORMANCE("subnet.data")

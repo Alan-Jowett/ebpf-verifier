@@ -15,6 +15,7 @@ struct ebpf_inst {
     std::uint8_t src : 4; //< Source register
     std::int16_t offset;
     std::int32_t imm;     //< Immediate constant
+    constexpr bool operator==(const ebpf_inst&) const = default;
 };
 
 enum {
@@ -44,22 +45,29 @@ enum {
 
     INST_MODE_MASK = 0xe0,
 
-    INST_ABS = 1,
-    INST_IND = 2,
-    INST_MEM = 3,
-    INST_LEN = 4,
-    INST_MSH = 5,
-    INST_XADD = 6,
-    INST_MEM_UNUSED = 7,
+    INST_MODE_IMM = 0x00, // 64-bit immediate instructions
+    INST_MODE_ABS = 0x20, // legacy BPF packet access (absolute)
+    INST_MODE_IND = 0x40, // legacy BPF packet access (indirect)
+    INST_MODE_MEM = 0x60, // regular load and store operations
+    INST_MODE_MEMSX = 0x80, // sign-extension load operations
+    INST_MODE_UNUSED1 = 0xa0,
+    INST_MODE_ATOMIC = 0xc0, // atomic operations
+    INST_MODE_UNUSED2 = 0xe0,
 
     INST_OP_LDDW_IMM = (INST_CLS_LD | INST_SRC_IMM | INST_SIZE_DW), // Special
 
-    INST_OP_JA = (INST_CLS_JMP | 0x00),
-    INST_OP_CALL = (INST_CLS_JMP | 0x80),
-    INST_OP_EXIT = (INST_CLS_JMP | 0x90),
-};
+    INST_FETCH = 0x1,
 
-enum {
+    INST_JA = 0x0,
+    INST_CALL = 0x8,
+    INST_EXIT = 0x9,
+
+    INST_OP_JA32 = ((INST_JA << 4) | INST_CLS_JMP32),
+    INST_OP_JA16 = ((INST_JA << 4) | INST_CLS_JMP),
+    INST_OP_CALL = ((INST_CALL << 4) | INST_SRC_IMM | INST_CLS_JMP),
+    INST_OP_CALLX = ((INST_CALL << 4) | INST_SRC_REG | INST_CLS_JMP),
+    INST_OP_EXIT = ((INST_EXIT << 4) | INST_CLS_JMP),
+
     INST_ALU_OP_ADD  = 0x00,
     INST_ALU_OP_SUB  = 0x10,
     INST_ALU_OP_MUL  = 0x20,
@@ -74,10 +82,8 @@ enum {
     INST_ALU_OP_MOV  = 0xb0,
     INST_ALU_OP_ARSH = 0xc0,
     INST_ALU_OP_END  = 0xd0,
-    INST_ALU_OP_MASK = 0xf0
-};
+    INST_ALU_OP_MASK = 0xf0,
 
-enum {
     R0_RETURN_VALUE = 0,
     R1_ARG = 1,
     R2_ARG = 2,
@@ -88,7 +94,8 @@ enum {
     R7 = 7,
     R8 = 8,
     R9 = 9,
-    R10_STACK_POINTER = 10
+    R10_STACK_POINTER = 10,
+    R11_ATOMIC_SCRATCH = 11, // Pseudo-register used internally for atomic instructions.
 };
 
 int opcode_to_width(uint8_t opcode);

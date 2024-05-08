@@ -4,7 +4,6 @@
 // This file is eBPF-specific, not derived from CRAB.
 
 #include <bitset>
-#include <functional>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -12,12 +11,11 @@
 #include "boost/endian/conversion.hpp"
 #include "boost/range/algorithm/set_algorithm.hpp"
 
-#include "crab_utils/stats.hpp"
-
 #include "crab/array_domain.hpp"
 #include "crab/ebpf_domain.hpp"
 
 #include "asm_ostream.hpp"
+#include "asm_unmarshal.hpp"
 #include "config.hpp"
 #include "dsl_syntax.hpp"
 #include "platform.hpp"
@@ -67,6 +65,13 @@ static linear_constraint_t neq(variable_t a, variable_t b) {
 }
 
 constexpr int MAX_PACKET_SIZE = 0xffff;
+
+// Pointers in the BPF VM are defined to be 64 bits.  Some contexts, like
+// data, data_end, and meta in Linux's struct xdp_md are only 32 bit offsets
+// from a base address not exposed to the program, but when a program is loaded,
+// the offsets get replaced with 64-bit address pointers.  However, we currently
+// need to do pointer arithmetic on 64-bit numbers so for now we cap the interval
+// to 32 bits.
 constexpr int64_t PTR_MAX = std::numeric_limits<int32_t>::max() - MAX_PACKET_SIZE;
 
 /** Linear constraint for a pointer comparison.
@@ -289,10 +294,6 @@ assume_signed_64bit_lt(const NumAbsDomain& inv, bool strict, variable_t left_sva
     using crab::interval_t;
     using namespace crab::dsl_syntax;
 
-    auto rlb = right_interval.lb();
-    auto lnub = left_interval_negative.truncate_to_sint(true).ub();
-    auto lnlb = left_interval_negative.truncate_to_sint(true).lb();
-
     if (right_interval <= interval_t::negative_int(true)) {
         // Interval can be represented as both an svalue and a uvalue since it fits in [INT_MIN, -1].
         return {strict ? (left_svalue < right_svalue) : (left_svalue <= right_svalue), number_t{0} <= left_uvalue,
@@ -316,9 +317,6 @@ assume_signed_32bit_lt(const NumAbsDomain& inv, bool strict, variable_t left_sva
     using crab::interval_t;
     using namespace crab::dsl_syntax;
 
-    auto rlb = right_interval.lb();
-    auto lpub = left_interval_positive.truncate_to_sint(false).ub();
-
     if (right_interval <= interval_t::negative_int(false)) {
         // Interval can be represented as both an svalue and a uvalue since it fits in [INT_MIN, -1],
         // aka [INT_MAX+1, UINT_MAX].
@@ -327,7 +325,8 @@ assume_signed_32bit_lt(const NumAbsDomain& inv, bool strict, variable_t left_sva
                 strict ? (left_svalue < right_svalue) : (left_svalue <= right_svalue)};
     } else if ((left_interval_negative | left_interval_positive) <= interval_t::nonnegative_int(false) &&
                right_interval <= interval_t::nonnegative_int(false)) {
-        // Interval can be represented as both an svalue and a uvalue since it fits in [0, INT_MAX].
+        // Interval can be represented as both an svalue and a uvalue since it fits in [0, INT_MAX]
+        auto lpub = left_interval_positive.truncate_to_sint(false).ub();
         return {left_svalue >= 0,
                 strict ? left_svalue < right_svalue : left_svalue <= right_svalue,
                 left_svalue <= left_uvalue,
@@ -383,9 +382,6 @@ assume_signed_32bit_gt(const NumAbsDomain& inv, bool strict, variable_t left_sva
                        const crab::interval_t& right_interval) {
     using crab::interval_t;
     using namespace crab::dsl_syntax;
-
-    auto rlb = right_interval.lb();
-    auto lpub = left_interval_positive.truncate_to_sint(false).ub();
 
     if (right_interval <= interval_t::nonnegative_int(false)) {
         // Interval can be represented as both an svalue and a uvalue since it fits in [0, INT_MAX].
@@ -921,8 +917,39 @@ ebpf_domain_t ebpf_domain_t::operator&(const ebpf_domain_t& other) const {
     return ebpf_domain_t(m_inv & other.m_inv, stack & other.stack);
 }
 
-ebpf_domain_t ebpf_domain_t::widen(const ebpf_domain_t& other) {
-    return ebpf_domain_t(m_inv.widen(other.m_inv), stack | other.stack);
+ebpf_domain_t ebpf_domain_t::calculate_constant_limits() {
+    ebpf_domain_t inv;
+    using namespace crab::dsl_syntax;
+    for (int i : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
+        auto r = reg_pack(i);
+        inv += r.svalue <= std::numeric_limits<int32_t>::max();
+        inv += r.svalue >= std::numeric_limits<int32_t>::min();
+        inv += r.uvalue <= std::numeric_limits<uint32_t>::max();
+        inv += r.uvalue >= 0;
+        inv += r.stack_offset <= EBPF_STACK_SIZE;
+        inv += r.stack_offset >= 0;
+        inv += r.shared_offset <= r.shared_region_size;
+        inv += r.shared_offset >= 0;
+        inv += r.packet_offset <= variable_t::packet_size();
+        inv += r.packet_offset >= 0;
+        if (thread_local_options.check_termination) {
+            for (variable_t counter : variable_t::get_loop_counters()) {
+                inv += counter <= std::numeric_limits<int32_t>::max();
+                inv += counter >= 0;
+                inv += counter <= r.svalue;
+            }
+        }
+    }
+    return inv;
+}
+
+static const ebpf_domain_t constant_limits = ebpf_domain_t::calculate_constant_limits();
+
+ebpf_domain_t ebpf_domain_t::widen(const ebpf_domain_t& other, bool to_constants) {
+    ebpf_domain_t res{m_inv.widen(other.m_inv), stack | other.stack};
+    if (to_constants)
+        return res & constant_limits;
+    return res;
 }
 
 ebpf_domain_t ebpf_domain_t::narrow(const ebpf_domain_t& other) {
@@ -1271,24 +1298,24 @@ bool ebpf_domain_t::TypeDomain::implies_type(const NumAbsDomain& inv, const line
     return inv.when(a).entail(b);
 }
 
-bool ebpf_domain_t::TypeDomain::is_in_group(const NumAbsDomain& m_inv, const Reg& r, TypeGroup group) const {
+bool ebpf_domain_t::TypeDomain::is_in_group(const NumAbsDomain& inv, const Reg& r, TypeGroup group) const {
     using namespace crab::dsl_syntax;
     variable_t t = reg_pack(r).type;
     switch (group) {
-    case TypeGroup::number: return m_inv.entail(t == T_NUM);
-    case TypeGroup::map_fd: return m_inv.entail(t == T_MAP);
-    case TypeGroup::map_fd_programs: return m_inv.entail(t == T_MAP_PROGRAMS);
-    case TypeGroup::ctx: return m_inv.entail(t == T_CTX);
-    case TypeGroup::packet: return m_inv.entail(t == T_PACKET);
-    case TypeGroup::stack: return m_inv.entail(t == T_STACK);
-    case TypeGroup::shared: return m_inv.entail(t == T_SHARED);
-    case TypeGroup::non_map_fd: return m_inv.entail(t >= T_NUM);
-    case TypeGroup::mem: return m_inv.entail(t >= T_PACKET);
-    case TypeGroup::mem_or_num: return m_inv.entail(t >= T_NUM) && m_inv.entail(t != T_CTX);
-    case TypeGroup::pointer: return m_inv.entail(t >= T_CTX);
-    case TypeGroup::ptr_or_num: return m_inv.entail(t >= T_NUM);
-    case TypeGroup::stack_or_packet: return m_inv.entail(t >= T_PACKET) && m_inv.entail(t <= T_STACK);
-    case TypeGroup::singleton_ptr: return m_inv.entail(t >= T_CTX) && m_inv.entail(t <= T_STACK);
+    case TypeGroup::number: return inv.entail(t == T_NUM);
+    case TypeGroup::map_fd: return inv.entail(t == T_MAP);
+    case TypeGroup::map_fd_programs: return inv.entail(t == T_MAP_PROGRAMS);
+    case TypeGroup::ctx: return inv.entail(t == T_CTX);
+    case TypeGroup::packet: return inv.entail(t == T_PACKET);
+    case TypeGroup::stack: return inv.entail(t == T_STACK);
+    case TypeGroup::shared: return inv.entail(t == T_SHARED);
+    case TypeGroup::non_map_fd: return inv.entail(t >= T_NUM);
+    case TypeGroup::mem: return inv.entail(t >= T_PACKET);
+    case TypeGroup::mem_or_num: return inv.entail(t >= T_NUM) && inv.entail(t != T_CTX);
+    case TypeGroup::pointer: return inv.entail(t >= T_CTX);
+    case TypeGroup::ptr_or_num: return inv.entail(t >= T_NUM);
+    case TypeGroup::stack_or_packet: return inv.entail(t >= T_PACKET) && inv.entail(t <= T_STACK);
+    case TypeGroup::singleton_ptr: return inv.entail(t >= T_CTX) && inv.entail(t <= T_STACK);
     }
     assert(false);
     return false;
@@ -1345,19 +1372,10 @@ void ebpf_domain_t::overflow_unsigned(NumAbsDomain& inv, variable_t lhs, int fin
     overflow_bounds(inv, lhs, span, finite_width, false);
 }
 
-void ebpf_domain_t::operator()(const basic_block_t& bb, bool check_termination) {
+void ebpf_domain_t::operator()(const basic_block_t& bb) {
     for (const Instruction& statement : bb) {
         std::visit(*this, statement);
     }
-    if (check_termination) {
-        // +1 to avoid being tricked by empty loops
-        add(variable_t::instruction_count(), crab::number_t((unsigned)bb.size() + 1));
-    }
-}
-
-bound_t ebpf_domain_t::get_instruction_count_upper_bound() {
-    const auto& ub = m_inv[variable_t::instruction_count()].ub();
-    return ub;
 }
 
 void ebpf_domain_t::check_access_stack(NumAbsDomain& inv, const linear_expression_t& lb,
@@ -1474,6 +1492,18 @@ void ebpf_domain_t::operator()(const Un& stmt) {
         swap_endianness(dst.svalue, int64_t(0), boost::endian::native_to_little<int64_t>);
         swap_endianness(dst.svalue, uint64_t(0), boost::endian::native_to_little<uint64_t>);
         break;
+    case Un::Op::SWAP16:
+        swap_endianness(dst.svalue, uint16_t(0), boost::endian::endian_reverse<uint16_t>);
+        swap_endianness(dst.uvalue, uint16_t(0), boost::endian::endian_reverse<uint16_t>);
+        break;
+    case Un::Op::SWAP32:
+        swap_endianness(dst.svalue, uint32_t(0), boost::endian::endian_reverse<uint32_t>);
+        swap_endianness(dst.uvalue, uint32_t(0), boost::endian::endian_reverse<uint32_t>);
+        break;
+    case Un::Op::SWAP64:
+        swap_endianness(dst.svalue, int64_t(0), boost::endian::endian_reverse<int64_t>);
+        swap_endianness(dst.uvalue, uint64_t(0), boost::endian::endian_reverse<uint64_t>);
+        break;
     case Un::Op::NEG:
         neg(dst.svalue, dst.uvalue, stmt.is64 ? 64 : 32);
         havoc_offsets(stmt.dst);
@@ -1517,8 +1547,8 @@ void ebpf_domain_t::operator()(const ValidDivisor& s) {
     if (!type_inv.implies_type(m_inv, type_is_pointer(reg), type_is_number(s.reg)))
         require(m_inv, linear_constraint_t::FALSE(), "Only numbers can be used as divisors");
     if (!thread_local_options.allow_division_by_zero) {
-        // Division is an unsigned operation. There are no eBPF instructions for signed division.
-        require(m_inv, reg.uvalue != 0, "Possible division by zero");
+        auto v = s.is_signed ? reg.svalue : reg.uvalue;
+        require(m_inv, v != 0, "Possible division by zero");
     }
 }
 
@@ -1529,13 +1559,35 @@ void ebpf_domain_t::operator()(const ValidStore& s) {
 
 void ebpf_domain_t::operator()(const TypeConstraint& s) {
     if (!type_inv.is_in_group(m_inv, s.reg, s.types))
-        require(m_inv, linear_constraint_t::FALSE(), "");
+        require(m_inv, linear_constraint_t::FALSE(), "Invalid type");
+}
+
+void ebpf_domain_t::operator()(const FuncConstraint& s) {
+    // Look up the helper function id.
+    const reg_pack_t& reg = reg_pack(s.reg);
+    auto src_interval = m_inv.eval_interval(reg.svalue);
+    if (auto sn = src_interval.singleton()) {
+        if (sn->fits_sint32()) {
+            // We can now process it as if the id was immediate.
+            int32_t imm = sn->cast_to_sint32();
+            if (!global_program_info->platform->is_helper_usable(imm)) {
+                require(m_inv, linear_constraint_t::FALSE(), "invalid helper function id " + std::to_string(imm));
+                return;
+            }
+            Call call = make_call(imm, *global_program_info->platform);
+            for (Assert a : get_assertions(call, *global_program_info)) {
+                (*this)(a);
+            }
+            return;
+        }
+    }
+    require(m_inv, linear_constraint_t::FALSE(), "callx helper function id is not a valid singleton");
 }
 
 void ebpf_domain_t::operator()(const ValidSize& s) {
     using namespace crab::dsl_syntax;
     auto r = reg_pack(s.reg);
-    require(m_inv, s.can_be_zero ? r.svalue >= 0 : r.svalue > 0, "");
+    require(m_inv, s.can_be_zero ? r.svalue >= 0 : r.svalue > 0, "Invalid size");
 }
 
 // Get the start and end of the range of possible map fd values.
@@ -1796,7 +1848,7 @@ void ebpf_domain_t::operator()(const ValidAccess& s) {
 void ebpf_domain_t::operator()(const ZeroCtxOffset& s) {
     using namespace crab::dsl_syntax;
     auto reg = reg_pack(s.reg);
-    require(m_inv, reg.ctx_offset == 0, "");
+    require(m_inv, reg.ctx_offset == 0, "Nonzero context offset");
 }
 
 void ebpf_domain_t::operator()(const Assert& stmt) {
@@ -1884,12 +1936,20 @@ void ebpf_domain_t::do_load_ctx(NumAbsDomain& inv, const Reg& target_reg, const 
 
     number_t addr = *maybe_addr;
 
+    // We use offsets for packet data, data_end, and meta during verification,
+    // but at runtime they will be 64-bit pointers.  We can use the offset values
+    // for verification like we use map_fd's as a proxy for maps which
+    // at runtime are actually 64-bit memory pointers.
+    int offset_width = desc->end - desc->data;
     if (addr == desc->data) {
-        inv.assign(target.packet_offset, 0);
+        if (width == offset_width)
+            inv.assign(target.packet_offset, 0);
     } else if (addr == desc->end) {
-        inv.assign(target.packet_offset, variable_t::packet_size());
+        if (width == offset_width)
+            inv.assign(target.packet_offset, variable_t::packet_size());
     } else if (addr == desc->meta) {
-        inv.assign(target.packet_offset, variable_t::meta_offset());
+        if (width == offset_width)
+            inv.assign(target.packet_offset, variable_t::meta_offset());
     } else {
         if (may_touch_ptr)
             type_inv.havoc_type(inv, target_reg);
@@ -1897,9 +1957,11 @@ void ebpf_domain_t::do_load_ctx(NumAbsDomain& inv, const Reg& target_reg, const 
             type_inv.assign_type(inv, target_reg, T_NUM);
         return;
     }
-    type_inv.assign_type(inv, target_reg, T_PACKET);
-    inv += 4098 <= target.svalue;
-    inv += target.svalue <= PTR_MAX;
+    if (width == offset_width) {
+        type_inv.assign_type(inv, target_reg, T_PACKET);
+        inv += 4098 <= target.svalue;
+        inv += target.svalue <= PTR_MAX;
+    }
 }
 
 void ebpf_domain_t::do_load_packet_or_shared(NumAbsDomain& inv, const Reg& target_reg, const linear_expression_t& addr,
@@ -2092,8 +2154,69 @@ void ebpf_domain_t::do_mem_store(const Mem& b, Type val_type, SValue val_svalue,
     });
 }
 
-void ebpf_domain_t::operator()(const LockAdd& a) {
-    // nothing to do here
+// Construct a Bin operation that does the main operation that a given Atomic operation does atomically.
+static Bin atomic_to_bin(const Atomic& a) {
+    Bin bin{
+        .dst = Reg{R11_ATOMIC_SCRATCH}, .v = a.valreg, .is64 = (a.access.width == sizeof(uint64_t)), .lddw = false};
+    switch (a.op) {
+    case Atomic::Op::ADD: bin.op = Bin::Op::ADD; break;
+    case Atomic::Op::OR: bin.op = Bin::Op::OR; break;
+    case Atomic::Op::AND: bin.op = Bin::Op::AND; break;
+    case Atomic::Op::XOR: bin.op = Bin::Op::XOR; break;
+    case Atomic::Op::XCHG:
+    case Atomic::Op::CMPXCHG: bin.op = Bin::Op::MOV; break;
+    default: throw std::exception();
+    }
+    return bin;
+}
+
+void ebpf_domain_t::operator()(const Atomic& a) {
+    if (m_inv.is_bottom())
+        return;
+    if (!m_inv.entail(type_is_pointer(reg_pack(a.access.basereg))) ||
+        !m_inv.entail(type_is_number(reg_pack(a.valreg)))) {
+        return;
+    }
+    if (m_inv.entail(type_is_not_stack(reg_pack(a.access.basereg)))) {
+        // Shared memory regions are volatile so we can just havoc
+        // any register that will be updated.
+        if (a.op == Atomic::Op::CMPXCHG)
+            havoc_register(m_inv, Reg{R0_RETURN_VALUE});
+        else if (a.fetch)
+            havoc_register(m_inv, a.valreg);
+        return;
+    }
+
+    // Fetch the current value into the R11 pseudo-register.
+    const Reg r11{R11_ATOMIC_SCRATCH};
+    (*this)(Mem{.access = a.access, .value = r11, .is_load = true});
+
+    // Compute the new value in R11.
+    (*this)(atomic_to_bin(a));
+
+    if (a.op == Atomic::Op::CMPXCHG) {
+        // For CMPXCHG, store the original value in r0.
+        (*this)(Mem{.access = a.access, .value = Reg{R0_RETURN_VALUE}, .is_load = true});
+
+        // For the destination, there are 3 possibilities:
+        // 1) dst.value == r0.value : set R11 to valreg
+        // 2) dst.value != r0.value : don't modify R11
+        // 3) dst.value may or may not == r0.value : set R11 to the union of R11 and valreg
+        // For now we just havoc the value of R11.
+        havoc_register(m_inv, r11);
+    } else if (a.fetch) {
+        // For other FETCH operations, store the original value in the src register.
+        (*this)(Mem{.access = a.access, .value = a.valreg, .is_load = true});
+    }
+
+    // Store the new value back in the original shared memory location.
+    // Note that do_mem_store() currently doesn't track shared memory values,
+    // but stack memory values are tracked and are legal here.
+    (*this)(Mem{.access = a.access, .value = r11, .is_load = false});
+
+    // Clear the R11 pseudo-register.
+    havoc_register(m_inv, r11);
+    type_inv.havoc_type(m_inv, r11);
 }
 
 void ebpf_domain_t::operator()(const Call& call) {
@@ -2122,7 +2245,12 @@ void ebpf_domain_t::operator()(const Call& call) {
 
         case ArgPair::Kind::PTR_TO_WRITABLE_MEM: {
             bool store_numbers = true;
-            variable_t addr = get_type_offset_variable(param.mem).value();
+            auto variable = get_type_offset_variable(param.mem);
+            if (!variable.has_value()) {
+                require(m_inv, linear_constraint_t::FALSE(), "Argument must be a pointer to writable memory");
+                return;
+            }
+            variable_t addr = variable.value();
             variable_t width = reg_pack(param.size).svalue;
 
             m_inv = type_inv.join_over_types(m_inv, param.mem, [&](NumAbsDomain& inv, type_encoding_t type) {
@@ -2185,6 +2313,28 @@ out:
     scratch_caller_saved_registers();
     if (call.reallocate_packet) {
         forget_packet_pointers();
+    }
+}
+
+void ebpf_domain_t::operator()(const Callx& callx) {
+    using namespace crab::dsl_syntax;
+    if (m_inv.is_bottom())
+        return;
+
+    // Look up the helper function id.
+    const reg_pack_t& reg = reg_pack(callx.func);
+    auto src_interval = m_inv.eval_interval(reg.svalue);
+    if (auto sn = src_interval.singleton()) {
+        if (sn->fits_sint32()) {
+            // We can now process it as if the id was immediate.
+            int32_t imm = sn->cast_to_sint32();
+            if (!global_program_info->platform->is_helper_usable(imm)) {
+                return;
+            }
+            Call call = make_call(imm, *global_program_info->platform);
+            (*this)(call);
+            return;
+        }
     }
 }
 
@@ -2332,6 +2482,51 @@ void ebpf_domain_t::lshr(const Reg& dst_reg, int imm, int finite_width) {
     havoc_offsets(dst_reg);
 }
 
+static inline int _movsx_bits(Bin::Op op) {
+    switch (op) {
+    case Bin::Op::MOVSX8: return 8;
+    case Bin::Op::MOVSX16: return 16;
+    case Bin::Op::MOVSX32: return 32;
+    default: throw std::exception();
+    }
+}
+
+void ebpf_domain_t::sign_extend(const Reg& dst_reg, const linear_expression_t& right_svalue, int finite_width,
+                                Bin::Op op) {
+    using namespace crab;
+
+    int bits = _movsx_bits(op);
+    reg_pack_t dst = reg_pack(dst_reg);
+    interval_t right_interval = m_inv.eval_interval(right_svalue);
+    type_inv.assign_type(m_inv, dst_reg, T_NUM);
+    havoc_offsets(dst_reg);
+    int64_t span = 1ULL << bits;
+    if (right_interval.ub() - right_interval.lb() >= number_t{span}) {
+        // Interval covers the full space.
+        if (bits == 64) {
+            havoc(dst.svalue);
+            return;
+        }
+        right_interval = interval_t::signed_int(bits);
+    }
+    int64_t mask = 1ULL << (bits - 1);
+
+    // Sign extend each bound.
+    int64_t lb = right_interval.lb().number().value().cast_to_sint64();
+    lb &= (span - 1);
+    lb = (lb ^ mask) - mask;
+    int64_t ub = right_interval.ub().number().value().cast_to_sint64();
+    ub &= (span - 1);
+    ub = (ub ^ mask) - mask;
+    m_inv.set(dst.svalue, crab::interval_t{number_t{lb}, number_t{ub}});
+
+    if (finite_width) {
+        m_inv.assign(dst.uvalue, dst.svalue);
+        overflow_signed(m_inv, dst.svalue, finite_width);
+        overflow_unsigned(m_inv, dst.uvalue, finite_width);
+    }
+}
+
 void ebpf_domain_t::ashr(const Reg& dst_reg, const linear_expression_t& right_svalue, int finite_width) {
     using namespace crab;
 
@@ -2423,6 +2618,14 @@ void ebpf_domain_t::operator()(const Bin& bin) {
             break;
         case Bin::Op::UMOD:
             urem(dst.svalue, dst.uvalue, imm, finite_width);
+            havoc_offsets(bin.dst);
+            break;
+        case Bin::Op::SDIV:
+            sdiv(dst.svalue, dst.uvalue, imm, finite_width);
+            havoc_offsets(bin.dst);
+            break;
+        case Bin::Op::SMOD:
+            srem(dst.svalue, dst.uvalue, imm, finite_width);
             havoc_offsets(bin.dst);
             break;
         case Bin::Op::OR:
@@ -2571,6 +2774,14 @@ void ebpf_domain_t::operator()(const Bin& bin) {
             urem(dst.svalue, dst.uvalue, src.uvalue, finite_width);
             havoc_offsets(bin.dst);
             break;
+        case Bin::Op::SDIV:
+            sdiv(dst.svalue, dst.uvalue, src.svalue, finite_width);
+            havoc_offsets(bin.dst);
+            break;
+        case Bin::Op::SMOD:
+            srem(dst.svalue, dst.uvalue, src.svalue, finite_width);
+            havoc_offsets(bin.dst);
+            break;
         case Bin::Op::OR:
             bitwise_or(dst.svalue, dst.uvalue, src.uvalue, finite_width);
             havoc_offsets(bin.dst);
@@ -2581,7 +2792,6 @@ void ebpf_domain_t::operator()(const Bin& bin) {
             break;
         case Bin::Op::LSH:
             if (m_inv.entail(type_is_number(src_reg))) {
-                auto src = reg_pack(src_reg);
                 auto src_interval = m_inv.eval_interval(src.uvalue);
                 if (std::optional<number_t> sn = src_interval.singleton()) {
                     uint64_t imm = sn->cast_to_uint64() & (bin.is64 ? 63 : 31);
@@ -2600,7 +2810,6 @@ void ebpf_domain_t::operator()(const Bin& bin) {
             break;
         case Bin::Op::RSH:
             if (m_inv.entail(type_is_number(src_reg))) {
-                auto src = reg_pack(src_reg);
                 auto src_interval = m_inv.eval_interval(src.uvalue);
                 if (std::optional<number_t> sn = src_interval.singleton()) {
                     uint64_t imm = sn->cast_to_uint64() & (bin.is64 ? 63 : 31);
@@ -2631,31 +2840,76 @@ void ebpf_domain_t::operator()(const Bin& bin) {
             bitwise_xor(dst.svalue, dst.uvalue, src.uvalue, finite_width);
             havoc_offsets(bin.dst);
             break;
+        case Bin::Op::MOVSX8:
+        case Bin::Op::MOVSX16:
+        case Bin::Op::MOVSX32:
+            // Keep relational information if operation is a no-op.
+            if ((dst.svalue == src.svalue) && (m_inv.eval_interval(dst.svalue) <= interval_t::signed_int(_movsx_bits(bin.op)))) {
+                return;
+            }
+            if (m_inv.entail(type_is_number(src_reg))) {
+                sign_extend(bin.dst, src.svalue, finite_width, bin.op);
+                break;
+            }
+            havoc(dst.svalue);
+            havoc(dst.uvalue);
+            havoc_offsets(bin.dst);
+            break;
         case Bin::Op::MOV:
+            // Keep relational information if operation is a no-op.
+            if ((dst.svalue == src.svalue) && (m_inv.eval_interval(dst.uvalue) <= interval_t::unsigned_int(bin.is64))) {
+                return;
+            }
             assign(dst.svalue, src.svalue);
             assign(dst.uvalue, src.uvalue);
             havoc_offsets(bin.dst);
             m_inv = type_inv.join_over_types(m_inv, src_reg, [&](NumAbsDomain& inv, type_encoding_t type) {
-                inv.assign(dst.type, type);
-
                 switch (type) {
-                case T_CTX: inv.assign(dst.ctx_offset, src.ctx_offset); break;
+                case T_CTX:
+                    if (bin.is64) {
+                        inv.assign(dst.type, type);
+                        inv.assign(dst.ctx_offset, src.ctx_offset);
+                    }
+                    break;
                 case T_MAP:
-                case T_MAP_PROGRAMS: inv.assign(dst.map_fd, src.map_fd); break;
-                case T_PACKET: inv.assign(dst.packet_offset, src.packet_offset); break;
+                case T_MAP_PROGRAMS:
+                    if (bin.is64) {
+                        inv.assign(dst.type, type);
+                        inv.assign(dst.map_fd, src.map_fd);
+                    }
+                    break;
+                case T_PACKET:
+                    if (bin.is64) {
+                        inv.assign(dst.type, type);
+                        inv.assign(dst.packet_offset, src.packet_offset);
+                    }
+                    break;
                 case T_SHARED:
-                    inv.assign(dst.shared_region_size, src.shared_region_size);
-                    inv.assign(dst.shared_offset, src.shared_offset);
+                    if (bin.is64) {
+                        inv.assign(dst.type, type);
+                        inv.assign(dst.shared_region_size, src.shared_region_size);
+                        inv.assign(dst.shared_offset, src.shared_offset);
+                    }
                     break;
                 case T_STACK:
-                    inv.assign(dst.stack_offset, src.stack_offset);
-                    inv.assign(dst.stack_numeric_size, src.stack_numeric_size);
+                    if (bin.is64) {
+                        inv.assign(dst.type, type);
+                        inv.assign(dst.stack_offset, src.stack_offset);
+                        inv.assign(dst.stack_numeric_size, src.stack_numeric_size);
+                    }
                     break;
-                default: break;
+                default: inv.assign(dst.type, type); break;
                 }
             });
-            havoc(dst.type);
-            type_inv.assign_type(m_inv, bin.dst, std::get<Reg>(bin.v));
+            if (bin.is64) {
+                // Add dst.type=src.type invariant.
+                if ((bin.dst.v != std::get<Reg>(bin.v).v) || (type_inv.get_type(m_inv, dst.type) == T_UNINIT)) {
+                    // Only forget the destination type if we're copying from a different register,
+                    // or from the same uninitialized register.
+                    havoc(dst.type);
+                }
+                type_inv.assign_type(m_inv, bin.dst, std::get<Reg>(bin.v));
+            }
             break;
         }
     }
@@ -2695,7 +2949,7 @@ void ebpf_domain_t::initialize_packet(ebpf_domain_t& inv) {
 ebpf_domain_t ebpf_domain_t::from_constraints(const std::set<std::string>& constraints, bool setup_constraints) {
     ebpf_domain_t inv;
     if (setup_constraints) {
-        inv = ebpf_domain_t::setup_entry(false, false);
+        inv = ebpf_domain_t::setup_entry(false);
     }
     auto numeric_ranges = std::vector<crab::interval_t>();
     for (const auto& cst : parse_linear_constraints(constraints, numeric_ranges)) {
@@ -2710,7 +2964,7 @@ ebpf_domain_t ebpf_domain_t::from_constraints(const std::set<std::string>& const
     return inv;
 }
 
-ebpf_domain_t ebpf_domain_t::setup_entry(bool check_termination, bool init_r1) {
+ebpf_domain_t ebpf_domain_t::setup_entry(bool init_r1) {
     using namespace crab::dsl_syntax;
 
     ebpf_domain_t inv;
@@ -2733,10 +2987,21 @@ ebpf_domain_t ebpf_domain_t::setup_entry(bool check_termination, bool init_r1) {
     }
 
     initialize_packet(inv);
-    if (check_termination) {
-        inv.assign(variable_t::instruction_count(), 0);
-    }
     return inv;
 }
 
+void ebpf_domain_t::initialize_loop_counter(const label_t label) {
+    m_inv.assign(variable_t::loop_counter(to_string(label)), 0);
+}
+
+bound_t ebpf_domain_t::get_loop_count_upper_bound() {
+    crab::bound_t ub{number_t{0}};
+    for (variable_t counter : variable_t::get_loop_counters())
+        ub = std::max(ub, m_inv[counter].ub());
+    return ub;
+}
+
+void ebpf_domain_t::operator()(const IncrementLoopCounter& ins) {
+    this->add(variable_t::loop_counter(to_string(ins.name)), 1);
+}
 } // namespace crab
