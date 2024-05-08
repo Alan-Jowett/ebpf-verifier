@@ -254,5 +254,6 @@ const ebpf_platform_t g_ebpf_platform_linux = {
     parse_maps_section_linux,
     get_map_descriptor_linux,
     get_map_type_linux,
-    resolve_inner_map_references_linux
+    resolve_inner_map_references_linux,
+    bpf_conformance_groups_t::default_groups | bpf_conformance_groups_t::packet
 };

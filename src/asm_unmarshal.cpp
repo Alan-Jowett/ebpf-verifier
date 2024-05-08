@@ -50,7 +50,7 @@ struct InvalidInstruction : std::invalid_argument {
     size_t pc;
     explicit InvalidInstruction(size_t pc, const char* what) : std::invalid_argument{what}, pc{pc} {}
     InvalidInstruction(size_t pc, std::string what) : std::invalid_argument{what}, pc{pc} {}
-    InvalidInstruction(size_t pc, uint8_t opcode) : std::invalid_argument{make_opcode_message("Bad instruction", opcode)}, pc{pc} {}
+    InvalidInstruction(size_t pc, uint8_t opcode) : std::invalid_argument{make_opcode_message("bad instruction", opcode)}, pc{pc} {}
 };
 
 struct UnsupportedMemoryMode : std::invalid_argument {
@@ -87,6 +87,10 @@ static auto getMemWidth(uint8_t opcode) -> int {
 //     return {};
 // }
 
+static Instruction shift32(Reg dst, Bin::Op op) {
+    return (Instruction)Bin{.op=op,.dst = dst, .v = Imm{32}, .is64=true, .lddw=false};
+}
+
 struct Unmarshaller {
     vector<vector<string>>& notes;
     const program_info& info;
@@ -96,20 +100,29 @@ struct Unmarshaller {
 
     auto getAluOp(size_t pc, ebpf_inst inst) -> std::variant<Bin::Op, Un::Op> {
         // First handle instructions that support a non-zero offset.
+        bool is64 = (inst.opcode & INST_CLS_MASK) == INST_CLS_ALU64;
         switch (inst.opcode & INST_ALU_OP_MASK) {
         case INST_ALU_OP_DIV:
+            if (!info.platform->supports_group(is64 ? bpf_conformance_groups_t::divmul64
+                                                    : bpf_conformance_groups_t::divmul32))
+                throw InvalidInstruction(pc, inst.opcode);
             switch (inst.offset) {
             case 0: return Bin::Op::UDIV;
             case 1: return Bin::Op::SDIV;
             default: throw InvalidInstruction(pc, make_opcode_message("invalid offset for", inst.opcode));
             }
         case INST_ALU_OP_MOD:
+            if (!info.platform->supports_group(is64 ? bpf_conformance_groups_t::divmul64
+                                                    : bpf_conformance_groups_t::divmul32))
+                throw InvalidInstruction(pc, inst.opcode);
             switch (inst.offset) {
             case 0: return Bin::Op::UMOD;
             case 1: return Bin::Op::SMOD;
             default: throw InvalidInstruction(pc, make_opcode_message("invalid offset for", inst.opcode));
             }
         case INST_ALU_OP_MOV:
+            if (inst.offset > 0 && !(inst.opcode & INST_SRC_REG))
+                throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
             switch (inst.offset) {
             case 0: return Bin::Op::MOV;
             case 8: return Bin::Op::MOVSX8;
@@ -126,7 +139,11 @@ struct Unmarshaller {
         switch (inst.opcode & INST_ALU_OP_MASK) {
         case INST_ALU_OP_ADD: return Bin::Op::ADD;
         case INST_ALU_OP_SUB: return Bin::Op::SUB;
-        case INST_ALU_OP_MUL: return Bin::Op::MUL;
+        case INST_ALU_OP_MUL:
+            if (!info.platform->supports_group(is64 ? bpf_conformance_groups_t::divmul64
+                                                    : bpf_conformance_groups_t::divmul32))
+                throw InvalidInstruction(pc, inst.opcode);
+            return Bin::Op::MUL;
         case INST_ALU_OP_OR: return Bin::Op::OR;
         case INST_ALU_OP_AND: return Bin::Op::AND;
         case INST_ALU_OP_LSH: return Bin::Op::LSH;
@@ -136,7 +153,7 @@ struct Unmarshaller {
             if (inst.opcode & INST_SRC_REG)
                 throw InvalidInstruction{pc, inst.opcode};
             if (inst.src != 0)
-                throw InvalidInstruction{pc, make_opcode_message("nonzero src for register", inst.opcode)};
+                throw InvalidInstruction{pc, inst.opcode};
             if (inst.imm != 0)
                 throw InvalidInstruction(pc, make_opcode_message("nonzero imm for", inst.opcode));
             return Un::Op::NEG;
@@ -147,28 +164,61 @@ struct Unmarshaller {
             return Bin::Op::ARSH;
         case INST_ALU_OP_END:
             if (inst.src != 0)
-                throw InvalidInstruction{pc, make_opcode_message("nonzero src for register", inst.opcode)};
+                throw InvalidInstruction{pc, inst.opcode};
             if ((inst.opcode & INST_CLS_MASK) == INST_CLS_ALU64) {
                 if (inst.opcode & INST_END_BE)
                     throw InvalidInstruction(pc, inst.opcode);
                 switch (inst.imm) {
-                case 16: return Un::Op::SWAP16;
-                case 32: return Un::Op::SWAP32;
-                case 64: return Un::Op::SWAP64;
-                default: throw InvalidInstruction(pc, "invalid endian immediate");
+                case 16:
+                    if (!info.platform->supports_group(bpf_conformance_groups_t::base32))
+                        throw InvalidInstruction(pc, inst.opcode);
+                    return Un::Op::SWAP16;
+                case 32:
+                    if (!info.platform->supports_group(bpf_conformance_groups_t::base32))
+                        throw InvalidInstruction(pc, inst.opcode);
+                    return Un::Op::SWAP32;
+                case 64:
+                    if (!info.platform->supports_group(bpf_conformance_groups_t::base64))
+                        throw InvalidInstruction(pc, inst.opcode);
+                    return Un::Op::SWAP64;
+                default: throw InvalidInstruction(pc, "unsupported immediate");
                 }
             }
             switch (inst.imm) {
-            case 16: return (inst.opcode & INST_END_BE) ? Un::Op::BE16 : Un::Op::LE16;
-            case 32: return (inst.opcode & INST_END_BE) ? Un::Op::BE32 : Un::Op::LE32;
-            case 64: return (inst.opcode & INST_END_BE) ? Un::Op::BE64 : Un::Op::LE64;
+            case 16:
+                if (!info.platform->supports_group(bpf_conformance_groups_t::base32))
+                    throw InvalidInstruction(pc, inst.opcode);
+                return (inst.opcode & INST_END_BE) ? Un::Op::BE16 : Un::Op::LE16;
+            case 32:
+                if (!info.platform->supports_group(bpf_conformance_groups_t::base32))
+                    throw InvalidInstruction(pc, inst.opcode);
+                return (inst.opcode & INST_END_BE) ? Un::Op::BE32 : Un::Op::LE32;
+            case 64:
+                if (!info.platform->supports_group(bpf_conformance_groups_t::base64))
+                    throw InvalidInstruction(pc, inst.opcode);
+                return (inst.opcode & INST_END_BE) ? Un::Op::BE64 : Un::Op::LE64;
             default:
-                throw InvalidInstruction(pc, "invalid endian immediate");
+                throw InvalidInstruction(pc, "unsupported immediate");
             }
         case 0xe0: throw InvalidInstruction{pc, inst.opcode};
         case 0xf0: throw InvalidInstruction{pc, inst.opcode};
         }
         return {};
+    }
+
+    auto getAtomicOp(size_t pc, ebpf_inst inst) -> Atomic::Op {
+        Atomic::Op op = (Atomic::Op)(inst.imm & ~INST_FETCH);
+        switch (op) {
+        case Atomic::Op::XCHG:
+        case Atomic::Op::CMPXCHG:
+            if ((inst.imm & INST_FETCH) == 0)
+                throw InvalidInstruction(pc, "unsupported immediate");
+        case Atomic::Op::ADD:
+        case Atomic::Op::OR:
+        case Atomic::Op::AND:
+        case Atomic::Op::XOR: return op;
+        }
+        throw InvalidInstruction(pc, "unsupported immediate");
     }
 
     uint64_t sign_extend(int32_t imm) { return (uint64_t)(int64_t)imm; }
@@ -182,7 +232,7 @@ struct Unmarshaller {
             return Reg{inst.src};
         } else {
             if (inst.src != 0)
-                throw InvalidInstruction{pc, make_opcode_message("nonzero src for register", inst.opcode)};
+                throw InvalidInstruction{pc, inst.opcode};
             // Imm is a signed 32-bit number.  Sign extend it to 64-bits for storage.
             return Imm{sign_extend(inst.imm)};
         }
@@ -213,35 +263,49 @@ struct Unmarshaller {
 
     auto makeMemOp(pc_t pc, ebpf_inst inst) -> Instruction {
         if (inst.dst > R10_STACK_POINTER || inst.src > R10_STACK_POINTER)
-            throw InvalidInstruction(pc, "Bad register");
+            throw InvalidInstruction(pc, "bad register");
 
         int width = getMemWidth(inst.opcode);
+        if (!info.platform->supports_group((width == sizeof(uint64_t)) ? bpf_conformance_groups_t::base64 : bpf_conformance_groups_t::base32))
+            throw InvalidInstruction(pc, inst.opcode);
         bool isLD = (inst.opcode & INST_CLS_MASK) == INST_CLS_LD;
-        switch ((inst.opcode & INST_MODE_MASK) >> 5) {
-        case 0: throw InvalidInstruction(pc, inst.opcode);
-        case INST_ABS:
-            if (!isLD)
-                throw InvalidInstruction(pc, "ABS but not LD");
-            if (width == 8)
-                note("invalid opcode LDABSDW");
+        switch (inst.opcode & INST_MODE_MASK) {
+        case INST_MODE_IMM:
+            throw InvalidInstruction(pc, inst.opcode);
+
+        case INST_MODE_ABS:
+            if (!info.platform->supports_group(bpf_conformance_groups_t::packet) ||
+                !isLD || (width == 8))
+                throw InvalidInstruction(pc, inst.opcode);
+            if (inst.dst != 0)
+                throw InvalidInstruction(pc, make_opcode_message("nonzero dst for register", inst.opcode));
+            if (inst.src > 0)
+                throw InvalidInstruction(pc, make_opcode_message("bad instruction", inst.opcode));
+            if (inst.offset != 0)
+                throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
             return Packet{.width = width, .offset = inst.imm, .regoffset = {}};
 
-        case INST_IND:
-            if (!isLD)
-                throw InvalidInstruction(pc, "IND but not LD");
-            if (width == 8)
-                note("invalid opcode LDINDDW");
+        case INST_MODE_IND:
+            if (!info.platform->supports_group(bpf_conformance_groups_t::packet) ||
+                !isLD || (width == 8))
+                throw InvalidInstruction(pc, inst.opcode);
+            if (inst.dst != 0)
+                throw InvalidInstruction(pc, make_opcode_message("nonzero dst for register", inst.opcode));
+            if (inst.src > R10_STACK_POINTER)
+                throw InvalidInstruction(pc, "bad register");
+            if (inst.offset != 0)
+                throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
             return Packet{.width = width, .offset = inst.imm, .regoffset = Reg{inst.src}};
 
-        case INST_MEM: {
+        case INST_MODE_MEM: {
             if (isLD)
                 throw InvalidInstruction(pc, inst.opcode);
             bool isLoad = getMemIsLoad(inst.opcode);
             if (isLoad && inst.dst == R10_STACK_POINTER)
-                throw InvalidInstruction(pc, "Cannot modify r10");
+                throw InvalidInstruction(pc, "cannot modify r10");
             bool isImm = !(inst.opcode & 1);
             if (isImm && inst.src != 0)
-                throw InvalidInstruction(pc, make_opcode_message("nonzero src for register", inst.opcode));
+                throw InvalidInstruction(pc, inst.opcode);
             if (!isImm && inst.imm != 0)
                 throw InvalidInstruction(pc, make_opcode_message("nonzero imm for", inst.opcode));
 
@@ -265,14 +329,16 @@ struct Unmarshaller {
             return res;
         }
 
-        case INST_XADD:
+        case INST_MODE_ATOMIC:
             if (((inst.opcode & INST_CLS_MASK) != INST_CLS_STX) ||
                 ((inst.opcode & INST_SIZE_MASK) != INST_SIZE_W &&
                  (inst.opcode & INST_SIZE_MASK) != INST_SIZE_DW))
                 throw InvalidInstruction(pc, inst.opcode);
-            if (inst.imm != 0)
-                throw InvalidInstruction(pc, "Unsupported atomic instruction");
-            return LockAdd{
+            if (!info.platform->supports_group(((inst.opcode & INST_SIZE_MASK) == INST_SIZE_DW) ? bpf_conformance_groups_t::atomic64 : bpf_conformance_groups_t::atomic32))
+                 throw InvalidInstruction(pc, inst.opcode);
+            return Atomic{
+                .op = getAtomicOp(pc, inst),
+                .fetch = (inst.imm & INST_FETCH) == INST_FETCH,
                 .access =
                     Deref{
                         .width = width,
@@ -287,17 +353,20 @@ struct Unmarshaller {
     }
 
     auto makeAluOp(size_t pc, ebpf_inst inst) -> Instruction {
+        bool is64 = (inst.opcode & INST_CLS_MASK) == INST_CLS_ALU64;
+        if (!info.platform->supports_group(is64 ? bpf_conformance_groups_t::base64 : bpf_conformance_groups_t::base32))
+            throw InvalidInstruction(pc, inst.opcode);
         if (inst.dst == R10_STACK_POINTER)
-            throw InvalidInstruction(pc, "Invalid target r10");
+            throw InvalidInstruction(pc, "invalid target r10");
         if (inst.dst > R10_STACK_POINTER || inst.src > R10_STACK_POINTER)
-            throw InvalidInstruction(pc, "Bad register");
-        return std::visit(overloaded{[&](Un::Op op) -> Instruction { return Un{.op = op, .dst = Reg{inst.dst}, .is64 = (inst.opcode & INST_CLS_MASK) == INST_CLS_ALU64}; },
+            throw InvalidInstruction(pc, "bad register");
+        return std::visit(overloaded{[&](Un::Op op) -> Instruction { return Un{.op = op, .dst = Reg{inst.dst}, .is64 = is64}; },
                                      [&](Bin::Op op) -> Instruction {
                                          Bin res{
                                              .op = op,
                                              .dst = Reg{inst.dst},
                                              .v = getBinValue(pc, inst),
-                                             .is64 = (inst.opcode & INST_CLS_MASK) == INST_CLS_ALU64,
+                                             .is64 = is64,
                                          };
                                          if (!thread_local_options.allow_division_by_zero && (op == Bin::Op::UDIV || op == Bin::Op::UMOD))
                                              if (std::holds_alternative<Imm>(res.v) && std::get<Imm>(res.v).v == 0)
@@ -308,21 +377,29 @@ struct Unmarshaller {
     }
 
     auto makeLddw(ebpf_inst inst, int32_t next_imm, const vector<ebpf_inst>& insts, pc_t pc) -> Instruction {
+        if (!info.platform->supports_group(bpf_conformance_groups_t::base64))
+            throw InvalidInstruction{pc, inst.opcode};
         if (pc >= insts.size() - 1)
-            throw InvalidInstruction(pc, "incomplete LDDW");
-        if (inst.src > 1 || inst.dst > R10_STACK_POINTER || inst.offset != 0)
-            throw InvalidInstruction(pc, "LDDW uses reserved fields");
+            throw InvalidInstruction(pc, "incomplete lddw");
+        ebpf_inst next = insts[pc + 1];
+        if (next.opcode != 0 || next.dst != 0 || next.src != 0 || next.offset != 0)
+            throw InvalidInstruction(pc, "invalid lddw");
+        if (inst.src > 1)
+            throw InvalidInstruction(pc, make_opcode_message("bad instruction", inst.opcode));
+        if (inst.offset != 0)
+            throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
+        if (inst.dst > R10_STACK_POINTER)
+            throw InvalidInstruction(pc, "bad register");
 
         if (inst.src == 1) {
             // magic number, meaning we're a per-process file descriptor defining the map.
             // (for details, look for BPF_PSEUDO_MAP_FD in the kernel)
-
+            if (next.imm != 0) {
+                throw InvalidInstruction(pc, "lddw uses reserved fields");
+            }
             return LoadMapFd{.dst = Reg{inst.dst}, .mapfd = inst.imm};
         }
 
-        ebpf_inst next = insts[pc + 1];
-        if (next.opcode != 0 || next.dst != 0 || next.src != 0 || next.offset != 0)
-            throw InvalidInstruction(pc, "invalid LDDW");
         return Bin{
             .op = Bin::Op::MOV,
             .dst = Reg{inst.dst},
@@ -358,7 +435,7 @@ struct Unmarshaller {
     auto makeCall(int32_t imm) const {
         EbpfHelperPrototype proto = info.platform->get_helper_prototype(imm);
         if (proto.return_type == EBPF_RETURN_TYPE_UNSUPPORTED) {
-            throw std::runtime_error(std::string("Unsupported function: ") + proto.name);
+            throw std::runtime_error(std::string("unsupported function: ") + proto.name);
         }
         Call res;
         res.func = imm;
@@ -376,7 +453,7 @@ struct Unmarshaller {
         for (size_t i = 1; i < args.size() - 1; i++) {
             switch (args[i]) {
             case EBPF_ARGUMENT_TYPE_UNSUPPORTED: {
-                throw std::runtime_error(std::string("Unsupported function: ") + proto.name);
+                throw std::runtime_error(std::string("unsupported function: ") + proto.name);
             }
             case EBPF_ARGUMENT_TYPE_DONTCARE: return res;
             case EBPF_ARGUMENT_TYPE_ANYTHING:
@@ -401,31 +478,60 @@ struct Unmarshaller {
         return res;
     }
 
+    auto makeCallx(ebpf_inst inst, pc_t pc) const {
+        // callx puts the register number in the 'dst' field rather than the 'src' field.
+        if (inst.dst > R10_STACK_POINTER)
+            throw InvalidInstruction(pc, "bad register");
+        if (inst.imm != 0) {
+            // Clang prior to v19 put the register number into the 'imm' field.
+            if (inst.dst > 0)
+                throw InvalidInstruction(pc, make_opcode_message("nonzero imm for", inst.opcode));
+            if (inst.imm < 0 || inst.imm > R10_STACK_POINTER)
+                throw InvalidInstruction(pc, "bad register");
+            return Callx{(uint8_t)inst.imm};
+        }
+        return Callx{inst.dst};
+    }
+
     auto makeJmp(ebpf_inst inst, const vector<ebpf_inst>& insts, pc_t pc) -> Instruction {
         switch ((inst.opcode >> 4) & 0xF) {
         case INST_CALL:
             if ((inst.opcode & INST_CLS_MASK) != INST_CLS_JMP)
                 throw InvalidInstruction(pc, inst.opcode);
-            if (inst.opcode & INST_SRC_REG)
+            if (!info.platform->supports_group(bpf_conformance_groups_t::callx) &&
+                (inst.opcode & INST_SRC_REG))
+                throw InvalidInstruction(pc, inst.opcode);
+            if (!info.platform->supports_group(bpf_conformance_groups_t::base32))
+                throw InvalidInstruction(pc, inst.opcode);
+            if (inst.src > 0)
                 throw InvalidInstruction(pc, inst.opcode);
             if (inst.offset != 0)
                 throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
+            if (inst.opcode & INST_SRC_REG)
+                return makeCallx(inst, pc);
+            if (inst.dst != 0)
+                throw InvalidInstruction(pc, make_opcode_message("nonzero dst for register", inst.opcode));
             if (!info.platform->is_helper_usable(inst.imm))
-                throw InvalidInstruction(pc, "invalid helper function id");
+                throw InvalidInstruction(pc, "invalid helper function id " + std::to_string(inst.imm));
             return makeCall(inst.imm);
         case INST_EXIT:
+            if (!info.platform->supports_group(bpf_conformance_groups_t::base32))
+                throw InvalidInstruction(pc, inst.opcode);
             if ((inst.opcode & INST_CLS_MASK) != INST_CLS_JMP || (inst.opcode & INST_SRC_REG))
                 throw InvalidInstruction(pc, inst.opcode);
             if (inst.src != 0)
-                throw InvalidInstruction(pc, make_opcode_message("nonzero src for register", inst.opcode));
+                throw InvalidInstruction(pc, inst.opcode);
+            if (inst.dst != 0)
+                throw InvalidInstruction(pc, make_opcode_message("nonzero dst for register", inst.opcode));
             if (inst.imm != 0)
                 throw InvalidInstruction(pc, make_opcode_message("nonzero imm for", inst.opcode));
             if (inst.offset != 0)
                 throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
             return Exit{};
         case INST_JA:
-            if ((inst.opcode & INST_CLS_MASK) != INST_CLS_JMP &&
-                (inst.opcode & INST_CLS_MASK) != INST_CLS_JMP32)
+            if ((inst.opcode & INST_CLS_MASK) != INST_CLS_JMP && (inst.opcode & INST_CLS_MASK) != INST_CLS_JMP32)
+                throw InvalidInstruction(pc, inst.opcode);
+            if (!info.platform->supports_group(bpf_conformance_groups_t::base32))
                 throw InvalidInstruction(pc, inst.opcode);
             if (inst.opcode & INST_SRC_REG)
                 throw InvalidInstruction(pc, inst.opcode);
@@ -433,11 +539,16 @@ struct Unmarshaller {
                 throw InvalidInstruction(pc, make_opcode_message("nonzero imm for", inst.opcode));
             if ((inst.opcode & INST_CLS_MASK) == INST_CLS_JMP32 && (inst.offset != 0))
                 throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
+            if (inst.dst != 0)
+                throw InvalidInstruction(pc, make_opcode_message("nonzero dst for register", inst.opcode));
         default: {
             // First validate the opcode, src, and imm.
+            auto is64 = (inst.opcode & INST_CLS_MASK) == INST_CLS_JMP;
+            if (!info.platform->supports_group(is64 ? bpf_conformance_groups_t::base64 : bpf_conformance_groups_t::base32))
+                throw InvalidInstruction(pc, inst.opcode);
             auto op = getJmpOp(pc, inst.opcode);
             if (!(inst.opcode & INST_SRC_REG) && (inst.src != 0))
-                throw InvalidInstruction(pc, make_opcode_message("nonzero src for register", inst.opcode));
+                throw InvalidInstruction(pc, inst.opcode);
             if ((inst.opcode & INST_SRC_REG) && (inst.imm != 0))
                 throw InvalidInstruction(pc, make_opcode_message("nonzero imm for", inst.opcode));
 
@@ -447,6 +558,12 @@ struct Unmarshaller {
                 throw InvalidInstruction(pc, "jump out of bounds");
             else if (insts[new_pc].opcode == 0)
                 throw InvalidInstruction(pc, "jump to middle of lddw");
+            if (inst.opcode != INST_OP_JA16 && inst.opcode != INST_OP_JA32) {
+                if (inst.dst > R10_STACK_POINTER)
+                    throw InvalidInstruction(pc, "bad register");
+                if ((inst.opcode & INST_SRC_REG) && (inst.src > R10_STACK_POINTER))
+                    throw InvalidInstruction(pc, "bad register");
+            }
 
             auto cond = (inst.opcode == INST_OP_JA16 || inst.opcode == INST_OP_JA32)
                                                   ? std::optional<Condition>{}
@@ -474,14 +591,14 @@ struct Unmarshaller {
         for (size_t pc = 0; pc < insts.size();) {
             ebpf_inst inst = insts[pc];
             Instruction new_ins;
-            bool lddw = false;
+            bool skip_instruction = false;
             bool fallthrough = true;
             switch (inst.opcode & INST_CLS_MASK) {
             case INST_CLS_LD:
                 if (inst.opcode == INST_OP_LDDW_IMM) {
                     int32_t next_imm = pc < insts.size() - 1 ? insts[pc + 1].imm : 0;
                     new_ins = makeLddw(inst, next_imm, insts, static_cast<pc_t>(pc));
-                    lddw = true;
+                    skip_instruction = true;
                     break;
                 }
                 // fallthrough
@@ -490,7 +607,32 @@ struct Unmarshaller {
             case INST_CLS_STX: new_ins = makeMemOp(pc, inst); break;
 
             case INST_CLS_ALU:
-            case INST_CLS_ALU64: new_ins = makeAluOp(pc, inst); break;
+            case INST_CLS_ALU64: {
+                new_ins = makeAluOp(pc, inst);
+
+                // Merge (rX <<= 32; rX >>>= 32) into wX = rX
+                //       (rX <<= 32; rX >>= 32)  into rX s32= rX
+                if (pc >= insts.size() - 1)
+                    break;
+                ebpf_inst next = insts[pc + 1];
+                auto dst = Reg{inst.dst};
+
+                if (new_ins != shift32(dst, Bin::Op::LSH))
+                    break;
+
+                if ((next.opcode & INST_CLS_MASK) != INST_CLS_ALU64)
+                    break;
+                auto next_ins = makeAluOp(pc+1, next);
+                if (next_ins == shift32(dst, Bin::Op::RSH)) {
+                    new_ins = Bin{.op = Bin::Op::MOV, .dst = dst, .v = dst, .is64 = false};
+                    skip_instruction = true;
+                } else if (next_ins == shift32(dst, Bin::Op::ARSH)) {
+                    new_ins = Bin{.op = Bin::Op::MOVSX32, .dst = dst, .v = dst, .is64 = true};
+                    skip_instruction = true;
+                }
+
+                break;
+            }
 
             case INST_CLS_JMP32:
             case INST_CLS_JMP: {
@@ -518,7 +660,7 @@ struct Unmarshaller {
 
             pc++;
             note_next_pc();
-            if (lddw) {
+            if (skip_instruction) {
                 pc++;
                 note_next_pc();
             }

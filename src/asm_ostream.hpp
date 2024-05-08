@@ -54,11 +54,12 @@ inline std::ostream& operator<<(std::ostream& os, LoadMapFd const& a) { return o
 inline std::ostream& operator<<(std::ostream& os, Bin const& a) { return os << (Instruction)a; }
 inline std::ostream& operator<<(std::ostream& os, Un const& a) { return os << (Instruction)a; }
 inline std::ostream& operator<<(std::ostream& os, Call const& a) { return os << (Instruction)a; }
+inline std::ostream& operator<<(std::ostream& os, Callx const& a) { return os << (Instruction)a; }
 inline std::ostream& operator<<(std::ostream& os, Exit const& a) { return os << (Instruction)a; }
 inline std::ostream& operator<<(std::ostream& os, Jmp const& a) { return os << (Instruction)a; }
 inline std::ostream& operator<<(std::ostream& os, Packet const& a) { return os << (Instruction)a; }
 inline std::ostream& operator<<(std::ostream& os, Mem const& a) { return os << (Instruction)a; }
-inline std::ostream& operator<<(std::ostream& os, LockAdd const& a) { return os << (Instruction)a; }
+inline std::ostream& operator<<(std::ostream& os, Atomic const& a) { return os << (Instruction)a; }
 inline std::ostream& operator<<(std::ostream& os, Assume const& a) { return os << (Instruction)a; }
 inline std::ostream& operator<<(std::ostream& os, Assert const& a) { return os << (Instruction)a; }
 inline std::ostream& operator<<(std::ostream& os, IncrementLoopCounter const& a) { return os << (Instruction)a; }

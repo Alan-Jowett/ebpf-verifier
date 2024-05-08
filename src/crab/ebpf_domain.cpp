@@ -15,6 +15,7 @@
 #include "crab/ebpf_domain.hpp"
 
 #include "asm_ostream.hpp"
+#include "asm_unmarshal.hpp"
 #include "config.hpp"
 #include "dsl_syntax.hpp"
 #include "platform.hpp"
@@ -64,6 +65,13 @@ static linear_constraint_t neq(variable_t a, variable_t b) {
 }
 
 constexpr int MAX_PACKET_SIZE = 0xffff;
+
+// Pointers in the BPF VM are defined to be 64 bits.  Some contexts, like
+// data, data_end, and meta in Linux's struct xdp_md are only 32 bit offsets
+// from a base address not exposed to the program, but when a program is loaded,
+// the offsets get replaced with 64-bit address pointers.  However, we currently
+// need to do pointer arithmetic on 64-bit numbers so for now we cap the interval
+// to 32 bits.
 constexpr int64_t PTR_MAX = std::numeric_limits<int32_t>::max() - MAX_PACKET_SIZE;
 
 /** Linear constraint for a pointer comparison.
@@ -1551,13 +1559,35 @@ void ebpf_domain_t::operator()(const ValidStore& s) {
 
 void ebpf_domain_t::operator()(const TypeConstraint& s) {
     if (!type_inv.is_in_group(m_inv, s.reg, s.types))
-        require(m_inv, linear_constraint_t::FALSE(), "");
+        require(m_inv, linear_constraint_t::FALSE(), "Invalid type");
+}
+
+void ebpf_domain_t::operator()(const FuncConstraint& s) {
+    // Look up the helper function id.
+    const reg_pack_t& reg = reg_pack(s.reg);
+    auto src_interval = m_inv.eval_interval(reg.svalue);
+    if (auto sn = src_interval.singleton()) {
+        if (sn->fits_sint32()) {
+            // We can now process it as if the id was immediate.
+            int32_t imm = sn->cast_to_sint32();
+            if (!global_program_info->platform->is_helper_usable(imm)) {
+                require(m_inv, linear_constraint_t::FALSE(), "invalid helper function id " + std::to_string(imm));
+                return;
+            }
+            Call call = make_call(imm, *global_program_info->platform);
+            for (Assert a : get_assertions(call, *global_program_info)) {
+                (*this)(a);
+            }
+            return;
+        }
+    }
+    require(m_inv, linear_constraint_t::FALSE(), "callx helper function id is not a valid singleton");
 }
 
 void ebpf_domain_t::operator()(const ValidSize& s) {
     using namespace crab::dsl_syntax;
     auto r = reg_pack(s.reg);
-    require(m_inv, s.can_be_zero ? r.svalue >= 0 : r.svalue > 0, "");
+    require(m_inv, s.can_be_zero ? r.svalue >= 0 : r.svalue > 0, "Invalid size");
 }
 
 // Get the start and end of the range of possible map fd values.
@@ -1818,7 +1848,7 @@ void ebpf_domain_t::operator()(const ValidAccess& s) {
 void ebpf_domain_t::operator()(const ZeroCtxOffset& s) {
     using namespace crab::dsl_syntax;
     auto reg = reg_pack(s.reg);
-    require(m_inv, reg.ctx_offset == 0, "");
+    require(m_inv, reg.ctx_offset == 0, "Nonzero context offset");
 }
 
 void ebpf_domain_t::operator()(const Assert& stmt) {
@@ -1906,12 +1936,20 @@ void ebpf_domain_t::do_load_ctx(NumAbsDomain& inv, const Reg& target_reg, const 
 
     number_t addr = *maybe_addr;
 
+    // We use offsets for packet data, data_end, and meta during verification,
+    // but at runtime they will be 64-bit pointers.  We can use the offset values
+    // for verification like we use map_fd's as a proxy for maps which
+    // at runtime are actually 64-bit memory pointers.
+    int offset_width = desc->end - desc->data;
     if (addr == desc->data) {
-        inv.assign(target.packet_offset, 0);
+        if (width == offset_width)
+            inv.assign(target.packet_offset, 0);
     } else if (addr == desc->end) {
-        inv.assign(target.packet_offset, variable_t::packet_size());
+        if (width == offset_width)
+            inv.assign(target.packet_offset, variable_t::packet_size());
     } else if (addr == desc->meta) {
-        inv.assign(target.packet_offset, variable_t::meta_offset());
+        if (width == offset_width)
+            inv.assign(target.packet_offset, variable_t::meta_offset());
     } else {
         if (may_touch_ptr)
             type_inv.havoc_type(inv, target_reg);
@@ -1919,9 +1957,11 @@ void ebpf_domain_t::do_load_ctx(NumAbsDomain& inv, const Reg& target_reg, const 
             type_inv.assign_type(inv, target_reg, T_NUM);
         return;
     }
-    type_inv.assign_type(inv, target_reg, T_PACKET);
-    inv += 4098 <= target.svalue;
-    inv += target.svalue <= PTR_MAX;
+    if (width == offset_width) {
+        type_inv.assign_type(inv, target_reg, T_PACKET);
+        inv += 4098 <= target.svalue;
+        inv += target.svalue <= PTR_MAX;
+    }
 }
 
 void ebpf_domain_t::do_load_packet_or_shared(NumAbsDomain& inv, const Reg& target_reg, const linear_expression_t& addr,
@@ -2114,8 +2154,69 @@ void ebpf_domain_t::do_mem_store(const Mem& b, Type val_type, SValue val_svalue,
     });
 }
 
-void ebpf_domain_t::operator()(const LockAdd& a) {
-    // nothing to do here
+// Construct a Bin operation that does the main operation that a given Atomic operation does atomically.
+static Bin atomic_to_bin(const Atomic& a) {
+    Bin bin{
+        .dst = Reg{R11_ATOMIC_SCRATCH}, .v = a.valreg, .is64 = (a.access.width == sizeof(uint64_t)), .lddw = false};
+    switch (a.op) {
+    case Atomic::Op::ADD: bin.op = Bin::Op::ADD; break;
+    case Atomic::Op::OR: bin.op = Bin::Op::OR; break;
+    case Atomic::Op::AND: bin.op = Bin::Op::AND; break;
+    case Atomic::Op::XOR: bin.op = Bin::Op::XOR; break;
+    case Atomic::Op::XCHG:
+    case Atomic::Op::CMPXCHG: bin.op = Bin::Op::MOV; break;
+    default: throw std::exception();
+    }
+    return bin;
+}
+
+void ebpf_domain_t::operator()(const Atomic& a) {
+    if (m_inv.is_bottom())
+        return;
+    if (!m_inv.entail(type_is_pointer(reg_pack(a.access.basereg))) ||
+        !m_inv.entail(type_is_number(reg_pack(a.valreg)))) {
+        return;
+    }
+    if (m_inv.entail(type_is_not_stack(reg_pack(a.access.basereg)))) {
+        // Shared memory regions are volatile so we can just havoc
+        // any register that will be updated.
+        if (a.op == Atomic::Op::CMPXCHG)
+            havoc_register(m_inv, Reg{R0_RETURN_VALUE});
+        else if (a.fetch)
+            havoc_register(m_inv, a.valreg);
+        return;
+    }
+
+    // Fetch the current value into the R11 pseudo-register.
+    const Reg r11{R11_ATOMIC_SCRATCH};
+    (*this)(Mem{.access = a.access, .value = r11, .is_load = true});
+
+    // Compute the new value in R11.
+    (*this)(atomic_to_bin(a));
+
+    if (a.op == Atomic::Op::CMPXCHG) {
+        // For CMPXCHG, store the original value in r0.
+        (*this)(Mem{.access = a.access, .value = Reg{R0_RETURN_VALUE}, .is_load = true});
+
+        // For the destination, there are 3 possibilities:
+        // 1) dst.value == r0.value : set R11 to valreg
+        // 2) dst.value != r0.value : don't modify R11
+        // 3) dst.value may or may not == r0.value : set R11 to the union of R11 and valreg
+        // For now we just havoc the value of R11.
+        havoc_register(m_inv, r11);
+    } else if (a.fetch) {
+        // For other FETCH operations, store the original value in the src register.
+        (*this)(Mem{.access = a.access, .value = a.valreg, .is_load = true});
+    }
+
+    // Store the new value back in the original shared memory location.
+    // Note that do_mem_store() currently doesn't track shared memory values,
+    // but stack memory values are tracked and are legal here.
+    (*this)(Mem{.access = a.access, .value = r11, .is_load = false});
+
+    // Clear the R11 pseudo-register.
+    havoc_register(m_inv, r11);
+    type_inv.havoc_type(m_inv, r11);
 }
 
 void ebpf_domain_t::operator()(const Call& call) {
@@ -2212,6 +2313,28 @@ out:
     scratch_caller_saved_registers();
     if (call.reallocate_packet) {
         forget_packet_pointers();
+    }
+}
+
+void ebpf_domain_t::operator()(const Callx& callx) {
+    using namespace crab::dsl_syntax;
+    if (m_inv.is_bottom())
+        return;
+
+    // Look up the helper function id.
+    const reg_pack_t& reg = reg_pack(callx.func);
+    auto src_interval = m_inv.eval_interval(reg.svalue);
+    if (auto sn = src_interval.singleton()) {
+        if (sn->fits_sint32()) {
+            // We can now process it as if the id was immediate.
+            int32_t imm = sn->cast_to_sint32();
+            if (!global_program_info->platform->is_helper_usable(imm)) {
+                return;
+            }
+            Call call = make_call(imm, *global_program_info->platform);
+            (*this)(call);
+            return;
+        }
     }
 }
 
@@ -2359,18 +2482,20 @@ void ebpf_domain_t::lshr(const Reg& dst_reg, int imm, int finite_width) {
     havoc_offsets(dst_reg);
 }
 
+static inline int _movsx_bits(Bin::Op op) {
+    switch (op) {
+    case Bin::Op::MOVSX8: return 8;
+    case Bin::Op::MOVSX16: return 16;
+    case Bin::Op::MOVSX32: return 32;
+    default: throw std::exception();
+    }
+}
+
 void ebpf_domain_t::sign_extend(const Reg& dst_reg, const linear_expression_t& right_svalue, int finite_width,
                                 Bin::Op op) {
     using namespace crab;
 
-    int bits;
-    switch (op) {
-    case Bin::Op::MOVSX8: bits = 8; break;
-    case Bin::Op::MOVSX16: bits = 16; break;
-    case Bin::Op::MOVSX32: bits = 32; break;
-    default: throw std::exception();
-    }
-
+    int bits = _movsx_bits(op);
     reg_pack_t dst = reg_pack(dst_reg);
     interval_t right_interval = m_inv.eval_interval(right_svalue);
     type_inv.assign_type(m_inv, dst_reg, T_NUM);
@@ -2378,8 +2503,11 @@ void ebpf_domain_t::sign_extend(const Reg& dst_reg, const linear_expression_t& r
     int64_t span = 1ULL << bits;
     if (right_interval.ub() - right_interval.lb() >= number_t{span}) {
         // Interval covers the full space.
-        havoc(dst.svalue);
-        return;
+        if (bits == 64) {
+            havoc(dst.svalue);
+            return;
+        }
+        right_interval = interval_t::signed_int(bits);
     }
     int64_t mask = 1ULL << (bits - 1);
 
@@ -2469,11 +2597,6 @@ void ebpf_domain_t::operator()(const Bin& bin) {
             overflow_unsigned(m_inv, dst.uvalue, (bin.is64) ? 64 : 32);
             type_inv.assign_type(m_inv, bin.dst, T_NUM);
             havoc_offsets(bin.dst);
-            break;
-        case Bin::Op::MOVSX8:
-        case Bin::Op::MOVSX16:
-        case Bin::Op::MOVSX32:
-            sign_extend(bin.dst, number_t{(int32_t)imm}, finite_width, bin.op);
             break;
         case Bin::Op::ADD:
             if (imm == 0)
@@ -2720,6 +2843,10 @@ void ebpf_domain_t::operator()(const Bin& bin) {
         case Bin::Op::MOVSX8:
         case Bin::Op::MOVSX16:
         case Bin::Op::MOVSX32:
+            // Keep relational information if operation is a no-op.
+            if ((dst.svalue == src.svalue) && (m_inv.eval_interval(dst.svalue) <= interval_t::signed_int(_movsx_bits(bin.op)))) {
+                return;
+            }
             if (m_inv.entail(type_is_number(src_reg))) {
                 sign_extend(bin.dst, src.svalue, finite_width, bin.op);
                 break;
@@ -2729,34 +2856,60 @@ void ebpf_domain_t::operator()(const Bin& bin) {
             havoc_offsets(bin.dst);
             break;
         case Bin::Op::MOV:
+            // Keep relational information if operation is a no-op.
+            if ((dst.svalue == src.svalue) && (m_inv.eval_interval(dst.uvalue) <= interval_t::unsigned_int(bin.is64))) {
+                return;
+            }
             assign(dst.svalue, src.svalue);
             assign(dst.uvalue, src.uvalue);
             havoc_offsets(bin.dst);
             m_inv = type_inv.join_over_types(m_inv, src_reg, [&](NumAbsDomain& inv, type_encoding_t type) {
-                inv.assign(dst.type, type);
-
                 switch (type) {
-                case T_CTX: inv.assign(dst.ctx_offset, src.ctx_offset); break;
+                case T_CTX:
+                    if (bin.is64) {
+                        inv.assign(dst.type, type);
+                        inv.assign(dst.ctx_offset, src.ctx_offset);
+                    }
+                    break;
                 case T_MAP:
-                case T_MAP_PROGRAMS: inv.assign(dst.map_fd, src.map_fd); break;
-                case T_PACKET: inv.assign(dst.packet_offset, src.packet_offset); break;
+                case T_MAP_PROGRAMS:
+                    if (bin.is64) {
+                        inv.assign(dst.type, type);
+                        inv.assign(dst.map_fd, src.map_fd);
+                    }
+                    break;
+                case T_PACKET:
+                    if (bin.is64) {
+                        inv.assign(dst.type, type);
+                        inv.assign(dst.packet_offset, src.packet_offset);
+                    }
+                    break;
                 case T_SHARED:
-                    inv.assign(dst.shared_region_size, src.shared_region_size);
-                    inv.assign(dst.shared_offset, src.shared_offset);
+                    if (bin.is64) {
+                        inv.assign(dst.type, type);
+                        inv.assign(dst.shared_region_size, src.shared_region_size);
+                        inv.assign(dst.shared_offset, src.shared_offset);
+                    }
                     break;
                 case T_STACK:
-                    inv.assign(dst.stack_offset, src.stack_offset);
-                    inv.assign(dst.stack_numeric_size, src.stack_numeric_size);
+                    if (bin.is64) {
+                        inv.assign(dst.type, type);
+                        inv.assign(dst.stack_offset, src.stack_offset);
+                        inv.assign(dst.stack_numeric_size, src.stack_numeric_size);
+                    }
                     break;
-                default: break;
+                default: inv.assign(dst.type, type); break;
                 }
             });
-            if ((bin.dst.v != std::get<Reg>(bin.v).v) || (type_inv.get_type(m_inv, dst.type) == T_UNINIT)) {
-                // Only forget the destination type if we're copying from a different register,
-                // or from the same uninitialized register.
-                havoc(dst.type);
+            if (bin.is64) {
+                // Add dst.type=src.type invariant.
+                if ((bin.dst.v != std::get<Reg>(bin.v).v) || (type_inv.get_type(m_inv, dst.type) == T_UNINIT)) {
+                    // Only forget the destination type if we're copying from a different register,
+                    // or from the same uninitialized register.
+                    havoc(dst.type);
+                }
+                type_inv.assign_type(m_inv, bin.dst, std::get<Reg>(bin.v));
             }
-            type_inv.assign_type(m_inv, bin.dst, std::get<Reg>(bin.v));
             break;
         }
     }

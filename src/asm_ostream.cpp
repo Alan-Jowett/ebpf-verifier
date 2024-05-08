@@ -189,6 +189,10 @@ std::ostream& operator<<(std::ostream& os, TypeConstraint const& tc) {
     return os << typereg(tc.reg) << " " << cmp_op << " " << tc.types;
 }
 
+std::ostream& operator<<(std::ostream& os, FuncConstraint const& fc) {
+    return os << typereg(fc.reg) << " is helper";
+}
+
 std::ostream& operator<<(std::ostream& os, AssertionConstraint const& a) {
     return std::visit([&](const auto& a) -> std::ostream& { return os << a; }, a);
 }
@@ -262,6 +266,8 @@ struct InstructionPrinterVisitor {
         os_ << ")";
     }
 
+    void operator()(Callx const& callx) { os_ << "callx " << callx.func; }
+
     void operator()(Exit const& b) { os_ << "exit"; }
 
     void operator()(Jmp const& b) {
@@ -322,10 +328,24 @@ struct InstructionPrinterVisitor {
         }
     }
 
-    void operator()(LockAdd const& b) {
+    void operator()(Atomic const& b) {
         os_ << "lock ";
         print(b.access);
-        os_ << " += " << b.valreg;
+        os_ << " ";
+        bool showfetch = true;
+        switch (b.op) {
+        case Atomic::Op::ADD: os_ << "+"; break;
+        case Atomic::Op::OR : os_ << "|"; break;
+        case Atomic::Op::AND: os_ << "&"; break;
+        case Atomic::Op::XOR: os_ << "^"; break;
+        case Atomic::Op::XCHG: os_ << "x"; showfetch = false; break;
+        case Atomic::Op::CMPXCHG: os_ << "cx"; showfetch = false; break;
+        }
+        os_ << "= " << b.valreg;
+
+        if (showfetch && b.fetch) {
+            os_ << " fetch";
+        }
     }
 
     void operator()(Assume const& b) {

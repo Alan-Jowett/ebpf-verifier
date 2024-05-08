@@ -174,9 +174,11 @@ static std::string instype(Instruction ins) {
             }
         }
         return "call_mem";
+    } else if (std::holds_alternative<Callx>(ins)) {
+        return "callx";
     } else if (std::holds_alternative<Mem>(ins)) {
         return std::get<Mem>(ins).is_load ? "load" : "store";
-    } else if (std::holds_alternative<LockAdd>(ins)) {
+    } else if (std::holds_alternative<Atomic>(ins)) {
         return "load_store";
     } else if (std::holds_alternative<Packet>(ins)) {
         return "packet_access";
@@ -203,7 +205,7 @@ std::vector<std::string> stats_headers() {
     return {
         "basic_blocks", "joins",       "other",      "jumps",         "assign",  "arith",
         "load",         "store",       "load_store", "packet_access", "call_1",  "call_mem",
-        "call_nomem",   "adjust_head", "map_in_map", "arith64",       "arith32",
+        "call_nomem",   "reallocate",  "map_in_map", "arith64",       "arith32",
     };
 }
 
@@ -224,8 +226,8 @@ std::map<std::string, int> collect_stats(const cfg_t& cfg) {
             }
             if (std::holds_alternative<Call>(ins)) {
                 auto call = std::get<Call>(ins);
-                if (call.func == 43 || call.func == 44)
-                    res["adjust_head"] = 1;
+                if (call.reallocate_packet)
+                    res["reallocate"] = 1;
             }
             if (std::holds_alternative<Bin>(ins)) {
                 auto const& bin = std::get<Bin>(ins);

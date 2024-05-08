@@ -34,6 +34,7 @@ using crab::linear_expression_t;
 #define ASSIGN R"_(\s*=\s*)_"
 #define LONGLONG R"_(\s*(ll|)\s*)_"
 #define UNOP R"_((-|be16|be32|be64|le16|le32|le64|swap16|swap32|swap64))_"
+#define ATOMICOP R"_((\+|\||&|\^|x|cx)=)_"
 
 #define PLUSMINUS R"_((\s*[+-])\s*)_"
 #define LPAREN R"_(\s*\(\s*)_"
@@ -52,7 +53,7 @@ using crab::linear_expression_t;
 #define ARRAY_RANGE R"_(\s*\[([-+]?\d+)\.\.\.\s*([-+]?\d+)\]?\s*)_"
 
 #define DOT "[.]"
-#define TYPE R"_(\s*(shared|number|packet|stack|ctx|map_fd|map_fd_program)\s*)_"
+#define TYPE R"_(\s*(shared|number|packet|stack|ctx|map_fd|map_fd_programs)\s*)_"
 
 static const std::map<std::string, Bin::Op> str_to_binop = {
     {"", Bin::Op::MOV},   {"+", Bin::Op::ADD},  {"-", Bin::Op::SUB},    {"*", Bin::Op::MUL},
@@ -80,6 +81,14 @@ static const std::map<std::string, Condition::Op> str_to_cmpop = {
     {"<", Condition::Op::LT},   {"<=", Condition::Op::LE},   {">", Condition::Op::GT},    {">=", Condition::Op::GE},
     {"s<", Condition::Op::SLT}, {"s<=", Condition::Op::SLE}, {"s>", Condition::Op::SGT},  {"s>=", Condition::Op::SGE},
 };
+
+static const std::map<std::string, Atomic::Op> str_to_atomicop = {
+    {"+", Atomic::Op::ADD},
+    {"|", Atomic::Op::OR},
+    {"&", Atomic::Op::AND},
+    {"^", Atomic::Op::XOR},
+    {"x", Atomic::Op::XCHG},
+    {"cx", Atomic::Op::CMPXCHG}};
 
 static const std::map<std::string, int> str_to_width = {
     {"8", 1},
@@ -148,6 +157,9 @@ Instruction parse_instruction(const std::string& line, const std::map<std::strin
         int func = boost::lexical_cast<int>(m[1]);
         return make_call(func, g_ebpf_platform_linux);
     }
+    if (regex_match(text, m, regex("callx " REG))) {
+        return Callx{reg(m[1])};
+    }
     if (regex_match(text, m, regex(WREG OPASSIGN REG))) {
         std::string r = m[1];
         return Bin{.op = str_to_binop.at(m[2]), .dst = reg(r), .v = reg(m[3]), .is64 = r.at(0) != 'w', .lddw = false};
@@ -179,8 +191,13 @@ Instruction parse_instruction(const std::string& line, const std::map<std::strin
             .is_load = false,
         };
     }
-    if (regex_match(text, m, regex("lock " DEREF PAREN(REG PLUSMINUS IMM) " [+]= " REG))) {
-        return LockAdd{.access = deref(m[1], m[2], m[3], m[4]), .valreg = reg(m[5])};
+    if (regex_match(text, m, regex("lock " DEREF PAREN(REG PLUSMINUS IMM) " " ATOMICOP " " REG "( fetch)?"))) {
+        Atomic::Op op = str_to_atomicop.at(m[5]);
+        return Atomic{
+            .op = op,
+            .fetch = m[7].matched || op == Atomic::Op::XCHG || op == Atomic::Op::CMPXCHG,
+            .access = deref(m[1], m[2], m[3], m[4]),
+            .valreg = reg(m[6])};
     }
     if (regex_match(text, m, regex("r0 = " DEREF "skb\\[(.*)\\]"))) {
         auto width = str_to_width.at(m[1]);
