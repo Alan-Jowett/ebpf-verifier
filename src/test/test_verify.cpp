@@ -546,7 +546,6 @@ TEST_SECTION_FAIL("cilium", "bpf_xdp_dsr_linux.o", "2/7")
 // The bigger issue is that the convexity of the numerical domain means that precise handling would still get
 // [-22, -1] which is not sufficient (at most -2 is needed)
 TEST_SECTION_FAIL("cilium", "bpf_xdp_dsr_linux.o", "2/10")
-TEST_SECTION_FAIL("cilium", "bpf_xdp_dsr_linux.o", "2/21")
 TEST_SECTION_FAIL("cilium", "bpf_xdp_dsr_linux.o", "2/24")
 
 TEST_SECTION_FAIL("cilium", "bpf_xdp_dsr_linux.o", "2/15")
@@ -559,18 +558,15 @@ TEST_SECTION_FAIL("cilium", "bpf_xdp_dsr_linux.o", "2/18")
 TEST_SECTION_FAIL("cilium", "bpf_xdp_snat_linux.o", "2/10")
 TEST_SECTION_FAIL("cilium", "bpf_xdp_snat_linux.o", "2/18")
 
-TEST_SECTION_FAIL("cilium", "bpf_xdp_dsr_linux.o", "2/19")
+TEST_SECTION("cilium", "bpf_xdp_dsr_linux.o", "2/19")
+TEST_SECTION("cilium", "bpf_xdp_dsr_linux.o", "2/21")
 
-// Failure: 230: Upper bound must be at most packet_size (valid_access(r3.offset+32, width=8) for write)
-// r3.packet_offset=[0, 82] and packet_size=[34, 65534]
-// looks like a combination of misunderstanding the value passed to xdp_adjust_tail()
-// which is "r7.value=[0, 82]; w7 -= r9;" where r9.value where "r7.value-r9.value<=48"
-TEST_SECTION_FAIL("cilium", "bpf_xdp_dsr_linux.o", "2/20")
+TEST_SECTION("cilium", "bpf_xdp_snat_linux.o", "2/19")
+TEST_SECTION("cilium", "bpf_xdp_dsr_linux.o", "2/20")
 
 TEST_SECTION_FAIL("cilium", "bpf_xdp_snat_linux.o", "2/7")
 TEST_SECTION_FAIL("cilium", "bpf_xdp_snat_linux.o", "2/15")
 TEST_SECTION_FAIL("cilium", "bpf_xdp_snat_linux.o", "2/17")
-TEST_SECTION_FAIL("cilium", "bpf_xdp_snat_linux.o", "2/19")
 
 // Failure (&255): assert r5.type == number; w5 &= 255;
 // fails since in one branch (77) r5 is a number but in another (92:93) it is a packet
