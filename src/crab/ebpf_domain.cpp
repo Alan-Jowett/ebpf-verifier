@@ -812,7 +812,7 @@ bool ebpf_domain_t::is_bottom() const { return m_inv.is_bottom(); }
 
 bool ebpf_domain_t::is_top() const { return m_inv.is_top() && stack.is_top(); }
 
-bool ebpf_domain_t::operator<=(const ebpf_domain_t& other) { return m_inv <= other.m_inv && stack <= other.stack; }
+bool ebpf_domain_t::operator<=(const ebpf_domain_t& other) const { return m_inv <= other.m_inv && stack <= other.stack; }
 
 bool ebpf_domain_t::operator==(const ebpf_domain_t& other) const {
     return stack == other.stack && m_inv <= other.m_inv && other.m_inv <= m_inv;
@@ -945,14 +945,14 @@ ebpf_domain_t ebpf_domain_t::calculate_constant_limits() {
 
 static const ebpf_domain_t constant_limits = ebpf_domain_t::calculate_constant_limits();
 
-ebpf_domain_t ebpf_domain_t::widen(const ebpf_domain_t& other, bool to_constants) {
+ebpf_domain_t ebpf_domain_t::widen(const ebpf_domain_t& other, bool to_constants) const {
     ebpf_domain_t res{m_inv.widen(other.m_inv), stack | other.stack};
     if (to_constants)
         return res & constant_limits;
     return res;
 }
 
-ebpf_domain_t ebpf_domain_t::narrow(const ebpf_domain_t& other) {
+ebpf_domain_t ebpf_domain_t::narrow(const ebpf_domain_t& other) const {
     return ebpf_domain_t(m_inv.narrow(other.m_inv), stack & other.stack);
 }
 

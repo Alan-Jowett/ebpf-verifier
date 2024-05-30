@@ -35,7 +35,7 @@ class ebpf_domain_t final {
     void set_to_bottom();
     [[nodiscard]] bool is_bottom() const;
     [[nodiscard]] bool is_top() const;
-    bool operator<=(const ebpf_domain_t& other);
+    bool operator<=(const ebpf_domain_t& other) const;
     bool operator==(const ebpf_domain_t& other) const;
     void operator|=(ebpf_domain_t&& other);
     void operator|=(const ebpf_domain_t& other);
@@ -43,9 +43,9 @@ class ebpf_domain_t final {
     ebpf_domain_t operator|(const ebpf_domain_t& other) const&;
     ebpf_domain_t operator|(const ebpf_domain_t& other) &&;
     ebpf_domain_t operator&(const ebpf_domain_t& other) const;
-    ebpf_domain_t widen(const ebpf_domain_t& other, bool to_constants);
-    ebpf_domain_t widening_thresholds(const ebpf_domain_t& other, const crab::iterators::thresholds_t& ts);
-    ebpf_domain_t narrow(const ebpf_domain_t& other);
+    ebpf_domain_t widen(const ebpf_domain_t& other, bool to_constants) const;
+    ebpf_domain_t widening_thresholds(const ebpf_domain_t& other, const crab::iterators::thresholds_t& ts) const;
+    ebpf_domain_t narrow(const ebpf_domain_t& other) const;
 
     typedef bool check_require_func_t(NumAbsDomain&, const linear_constraint_t&, std::string);
     void set_require_check(std::function<check_require_func_t> f);
