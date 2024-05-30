@@ -46,12 +46,12 @@ class ebpf_value_partition_domain_t {
     void operator|=(const ebpf_value_partition_domain_t& other);
     ebpf_value_partition_domain_t operator|(ebpf_value_partition_domain_t&& other) const;
     ebpf_value_partition_domain_t operator|(const ebpf_value_partition_domain_t& other) const&;
-    ebpf_value_partition_domain_t operator|(const ebpf_value_partition_domain_t& other) &&;
+    ebpf_value_partition_domain_t operator|(const ebpf_value_partition_domain_t& other) const&&;
     ebpf_value_partition_domain_t operator&(const ebpf_value_partition_domain_t& other) const;
-    ebpf_value_partition_domain_t widen(const ebpf_value_partition_domain_t& other, bool to_constants);
+    ebpf_value_partition_domain_t widen(const ebpf_value_partition_domain_t& other, bool to_constants) const;
     ebpf_value_partition_domain_t widening_thresholds(const ebpf_value_partition_domain_t& other,
-                                                      const crab::iterators::thresholds_t& ts);
-    ebpf_value_partition_domain_t narrow(const ebpf_value_partition_domain_t& other);
+                                                      const crab::iterators::thresholds_t& ts)  const;
+    ebpf_value_partition_domain_t narrow(const ebpf_value_partition_domain_t& other) const;
 
     typedef bool check_require_func_t(NumAbsDomain&, const linear_constraint_t&, std::string);
     void set_require_check(std::function<check_require_func_t> f);
@@ -75,6 +75,7 @@ class ebpf_value_partition_domain_t {
         for (auto& partition : partitions) {
             partition(stmt);
         }
+        // Should we drop bottom partitions here?
     }
 
     void initialize_loop_counter(label_t label);
@@ -82,9 +83,9 @@ class ebpf_value_partition_domain_t {
 
     friend std::ostream& operator<<(std::ostream& o, const ebpf_value_partition_domain_t& dom);
 
+  private:
     void merge_all_partitions();
 
-  private:
     /**
      * @brief Given two value partition domains, form a new domain that contains a set of partitions that is the union
      * of the partitions in the two input domains. Partitions are merged if they have the same packet_size variable.

@@ -155,7 +155,7 @@ ebpf_value_partition_domain_t::operator|(const ebpf_value_partition_domain_t& ot
     return join(*this, other);
 }
 
-ebpf_value_partition_domain_t ebpf_value_partition_domain_t::operator|(const ebpf_value_partition_domain_t& other) && {
+ebpf_value_partition_domain_t ebpf_value_partition_domain_t::operator|(const ebpf_value_partition_domain_t& other) const && {
     return std::move(join(*this, other));
 }
 
@@ -169,7 +169,7 @@ ebpf_value_partition_domain_t::operator&(const ebpf_value_partition_domain_t& ot
     return std::move(partitions);
 }
 ebpf_value_partition_domain_t ebpf_value_partition_domain_t::widen(const ebpf_value_partition_domain_t& other,
-                                                                   bool to_constants) {
+                                                                   bool to_constants) const {
     std::vector<ebpf_domain_t> partitions;
     merge_or_apply_to_all_partitions(other,
                                      [&partitions, to_constants](const ebpf_domain_t& lhs, const ebpf_domain_t& rhs) {
@@ -178,7 +178,7 @@ ebpf_value_partition_domain_t ebpf_value_partition_domain_t::widen(const ebpf_va
 
     return std::move(partitions);
 }
-ebpf_value_partition_domain_t ebpf_value_partition_domain_t::narrow(const ebpf_value_partition_domain_t& other) {
+ebpf_value_partition_domain_t ebpf_value_partition_domain_t::narrow(const ebpf_value_partition_domain_t& other) const {
     std::vector<ebpf_domain_t> partitions;
     merge_or_apply_to_all_partitions(other, [&partitions](const ebpf_domain_t& lhs, const ebpf_domain_t& rhs) {
         partitions.push_back(lhs.narrow(rhs));
@@ -220,6 +220,7 @@ string_invariant ebpf_value_partition_domain_t::to_set() {
 }
 
 void ebpf_value_partition_domain_t::initialize_loop_counter(label_t label) {
+    // Do we really need to merge all partitions here?
     merge_all_partitions();
 
     for (auto& partition : partitions) {
