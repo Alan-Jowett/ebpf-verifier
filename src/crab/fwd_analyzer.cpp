@@ -95,7 +95,6 @@ class interleaved_fwd_fixpoint_iterator_t final {
     domain_t join_all_prevs(const label_t& node) {
         domain_t res = domain_t::bottom();
         for (const label_t& prev : _cfg.prev_nodes(node)) {
-            //std::cout << "Joining " << prev << " with " << node << "\n";
             res |= get_post(prev);
         }
         return res;

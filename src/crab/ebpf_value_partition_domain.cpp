@@ -82,58 +82,19 @@ ebpf_value_partition_domain_t ebpf_value_partition_domain_t::join(const ebpf_val
                                                                   const ebpf_value_partition_domain_t& rhs) {
     std::vector<ebpf_domain_t> partitions;
 
-    // Check if any partitions have a value for the packet size.
-    bool has_packet_size = false;
-    for (const auto& partition : lhs.partitions) {
-        if (!partition.is_bottom() && !partition.m_inv[variable_t::packet_size()].is_bottom() &&
-            !partition.m_inv[variable_t::packet_size()].is_top()) {
-            auto interval = partition.m_inv[variable_t::packet_size()];
-            has_packet_size = true;
-            break;
-        }
-    }
+    std::copy_if(lhs.partitions.begin(), lhs.partitions.end(), std::back_inserter(partitions),
+                 [](const auto& partition) { return !partition.is_bottom(); });
 
-    for (const auto& partition : rhs.partitions) {
-        if (!partition.is_bottom() && !partition.m_inv[variable_t::packet_size()].is_bottom() &&
-            !partition.m_inv[variable_t::packet_size()].is_top()) {
-            auto interval = partition.m_inv[variable_t::packet_size()];
-            has_packet_size = true;
-            break;
-        }
-    }
+    std::copy_if(rhs.partitions.begin(), rhs.partitions.end(), std::back_inserter(partitions),
+                 [](const auto& partition) { return !partition.is_bottom(); });
 
-    // If no partitions have a value for the packet size, just merge all partitions.
-    if (!has_packet_size) {
-        ebpf_domain_t res_domain;
-        res_domain.set_to_bottom();
-        for (const auto& lhs_partition : lhs.partitions) {
-            res_domain |= lhs_partition;
-        }
-        for (const auto& rhs_partition : rhs.partitions) {
-            res_domain |= rhs_partition;
-        }
-        partitions.push_back(res_domain);
-
-        ebpf_value_partition_domain_t res;
-        res.partitions = std::move(partitions);
-        return res;
-    }
-
-    // Copy all non-bottom partitions from the left-hand side.
-    for (const auto& lhs_partition : lhs.partitions) {
-        if (!lhs_partition.is_bottom()) {
-            partitions.push_back(lhs_partition);
-        }
-    }
-
-    // Copy all non-bottom partitions from the right-hand side.
-    for (const auto& rhs_partition : rhs.partitions) {
-        if (!rhs_partition.is_bottom()) {
-            partitions.push_back(rhs_partition);
-        }
+    if (partitions.empty()) {
+        return bottom();
     }
 
     // Sort the partitions by the packet size interval.
+    // For some reason, the <= operator on is not valid for sort, so we need to use a lambda and explicitly specify the
+    // ordering predicate.
     std::sort(partitions.begin(), partitions.end(), [](const auto& lhs, const auto& rhs) {
         auto lhs_interval = lhs.m_inv[variable_t::packet_size()];
         auto rhs_interval = rhs.m_inv[variable_t::packet_size()];
@@ -154,24 +115,27 @@ ebpf_value_partition_domain_t ebpf_value_partition_domain_t::join(const ebpf_val
         }
     });
 
-    // Merge partitions that have the same packet size interval.
-    for (size_t i = 0; i < partitions.size(); i++) {
-        for (size_t j = i + 1; j < partitions.size(); j++) {
-            if (partitions[i].m_inv[variable_t::packet_size()] == partitions[j].m_inv[variable_t::packet_size()]) {
-                partitions[i] |= partitions[j];
-                partitions.erase(partitions.begin() + j);
-                j--;
-            } else {
-                break;
-            }
+    // Perform a single pass over the partitions to merge them.
+    // Partitions are sorted by packet size interval, so we can merge adjacent partitions.
+    // If the packet size interval is different, we start a new partition.
+    std::vector<ebpf_domain_t> merged_partitions;
+
+    // First partition is always added.
+    auto packet_size_interval = partitions[0].m_inv[variable_t::packet_size()];
+    merged_partitions.push_back(std::move(partitions[0]));
+
+    for (size_t i = 1; i < partitions.size(); i++) {
+        if (partitions[i].m_inv[variable_t::packet_size()] == packet_size_interval) {
+            // This partition has the same packet size interval as the previous one, merge them.
+            merged_partitions.back() |= partitions[i];
+        } else {
+            // This partition has a different packet size interval, add it to the list.
+            packet_size_interval = partitions[i].m_inv[variable_t::packet_size()];
+            merged_partitions.push_back(std::move(partitions[i]));
         }
     }
 
-    ebpf_value_partition_domain_t res;
-
-    res.partitions = std::move(partitions);
-
-    return res;
+    return merged_partitions;
 }
 
 void ebpf_value_partition_domain_t::operator|=(ebpf_value_partition_domain_t&& other) {
@@ -224,13 +188,11 @@ ebpf_value_partition_domain_t ebpf_value_partition_domain_t::narrow(const ebpf_v
 }
 
 void ebpf_value_partition_domain_t::set_require_check(std::function<check_require_func_t> f) {
-    merge_all_partitions();
     for (auto& partition : partitions) {
         partition.set_require_check(f);
     }
 }
 bound_t ebpf_value_partition_domain_t::get_loop_count_upper_bound() {
-    merge_all_partitions();
     bound_t ub{number_t{0}};
     for (auto& partition : partitions) {
         ub = std::max(ub, partition.get_loop_count_upper_bound());
