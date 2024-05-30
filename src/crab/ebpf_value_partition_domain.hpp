@@ -72,10 +72,24 @@ class ebpf_value_partition_domain_t {
      */
     template <typename statement_t>
     void operator()(const statement_t& stmt) {
+        bool partition_became_bottom = false;
+        // Forward the statement to all partitions.
         for (auto& partition : partitions) {
             partition(stmt);
+            if (partition.is_bottom()) {
+                partition_became_bottom = true;
+            }
         }
-        // Should we drop bottom partitions here?
+        // Remove partitions that became bottom.
+        if (partition_became_bottom) {
+            std::vector<ebpf_domain_t> new_partitions;
+            for (auto& partition : partitions) {
+                if (!partition.is_bottom()) {
+                    new_partitions.push_back(std::move(partition));
+                }
+            }
+            partitions = std::move(new_partitions);
+        }
     }
 
     void initialize_loop_counter(label_t label);
