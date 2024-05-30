@@ -23,6 +23,8 @@
 
 namespace crab {
 
+static std::string partition_key = "packet_size";
+
 ebpf_value_partition_domain_t::ebpf_value_partition_domain_t() : partitions(1) {}
 ebpf_value_partition_domain_t::ebpf_value_partition_domain_t(crab::domains::NumAbsDomain inv,
                                                              crab::domains::array_domain_t stack)
@@ -96,8 +98,8 @@ ebpf_value_partition_domain_t ebpf_value_partition_domain_t::join(const ebpf_val
     // For some reason, the <= operator on is not valid for sort, so we need to use a lambda and explicitly specify the
     // ordering predicate.
     std::sort(partitions.begin(), partitions.end(), [](const auto& lhs, const auto& rhs) {
-        auto lhs_interval = lhs.m_inv[variable_t::packet_size()];
-        auto rhs_interval = rhs.m_inv[variable_t::packet_size()];
+        auto lhs_interval = lhs.m_inv[variable_t::make(partition_key)];
+        auto rhs_interval = rhs.m_inv[variable_t::make(partition_key)];
 
         if (lhs_interval.is_bottom()) {
             return false;
@@ -121,16 +123,16 @@ ebpf_value_partition_domain_t ebpf_value_partition_domain_t::join(const ebpf_val
     std::vector<ebpf_domain_t> merged_partitions;
 
     // First partition is always added.
-    auto packet_size_interval = partitions[0].m_inv[variable_t::packet_size()];
+    auto packet_size_interval = partitions[0].m_inv[variable_t::make(partition_key)];
     merged_partitions.push_back(std::move(partitions[0]));
 
     for (size_t i = 1; i < partitions.size(); i++) {
-        if (partitions[i].m_inv[variable_t::packet_size()] == packet_size_interval) {
+        if (partitions[i].m_inv[variable_t::make(partition_key)] == packet_size_interval) {
             // This partition has the same packet size interval as the previous one, merge them.
             merged_partitions.back() |= partitions[i];
         } else {
             // This partition has a different packet size interval, add it to the list.
-            packet_size_interval = partitions[i].m_inv[variable_t::packet_size()];
+            packet_size_interval = partitions[i].m_inv[variable_t::make(partition_key)];
             merged_partitions.push_back(std::move(partitions[i]));
         }
     }
@@ -261,7 +263,7 @@ bool ebpf_value_partition_domain_t::has_same_partitions(const ebpf_value_partiti
     }
 
     for (size_t i = 0; i < partitions.size(); i++) {
-        if (partitions[i].m_inv[variable_t::packet_size()] != other.partitions[i].m_inv[variable_t::packet_size()]) {
+        if (partitions[i].m_inv[variable_t::make(partition_key)] != other.partitions[i].m_inv[variable_t::make(partition_key)]) {
             return false;
         }
     }

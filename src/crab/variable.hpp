@@ -49,10 +49,11 @@ class variable_t final {
 
     friend std::ostream& operator<<(std::ostream& o, variable_t v)  { return o << names->at(v._id); }
 
+    static variable_t make(const std::string& name);
+
     // var_factory portion.
     // This singleton is eBPF-specific, to avoid lifetime issues and/or passing factory explicitly everywhere:
   private:
-    static variable_t make(const std::string& name);
     static std::vector<std::string> _default_names();
 
     /**
