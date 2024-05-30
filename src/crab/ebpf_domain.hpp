@@ -22,6 +22,8 @@ struct reg_pack_t;
 class ebpf_domain_t final {
     struct TypeDomain;
 
+    friend class ebpf_value_partition_domain_t;
+
   public:
     ebpf_domain_t();
     ebpf_domain_t(crab::domains::NumAbsDomain inv, crab::domains::array_domain_t stack);

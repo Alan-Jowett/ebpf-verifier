@@ -13,6 +13,7 @@
 #include <boost/algorithm/string.hpp>
 
 #include "crab/ebpf_domain.hpp"
+#include "crab/ebpf_value_partition_domain.hpp"
 #include "crab/fwd_analyzer.hpp"
 #include "crab_utils/lazy_allocator.hpp"
 
@@ -21,6 +22,7 @@
 #include "string_constraints.hpp"
 
 using crab::ebpf_domain_t;
+using crab::ebpf_value_partition_domain_t;
 using std::string;
 
 thread_local crab::lazy_allocator<program_info> global_program_info;
@@ -55,12 +57,13 @@ struct checks_db final {
     checks_db() = default;
 };
 
-static checks_db generate_report(cfg_t& cfg, crab::invariant_table_t& pre_invariants,
-                                 crab::invariant_table_t& post_invariants) {
+template<typename domain_t = ebpf_domain_t>
+static checks_db generate_report(cfg_t& cfg, crab::invariant_table_t<domain_t>& pre_invariants,
+                                 crab::invariant_table_t<domain_t>& post_invariants) {
     checks_db m_db;
     for (const label_t& label : cfg.sorted_labels()) {
         basic_block_t& bb = cfg.get_node(label);
-        ebpf_domain_t from_inv(pre_invariants.at(label));
+        domain_t from_inv(pre_invariants.at(label));
         from_inv.set_require_check(
             [&m_db, label](auto& inv, const crab::linear_constraint_t& cst, const std::string& s) {
                 if (inv.is_bottom())
@@ -128,8 +131,9 @@ static void print_report(std::ostream& os, const checks_db& db, const Instructio
     }
 }
 
-static checks_db get_analysis_report(std::ostream& s, cfg_t& cfg, crab::invariant_table_t& pre_invariants,
-                                     crab::invariant_table_t& post_invariants) {
+template <typename domain_t = ebpf_domain_t>
+static checks_db get_analysis_report(std::ostream& s, cfg_t& cfg, crab::invariant_table_t<domain_t>& pre_invariants,
+                                     crab::invariant_table_t<domain_t>& post_invariants) {
     // Analyze the control-flow graph.
     checks_db db = generate_report(cfg, pre_invariants, post_invariants);
     if (thread_local_options.print_invariants) {
@@ -142,6 +146,7 @@ static checks_db get_analysis_report(std::ostream& s, cfg_t& cfg, crab::invarian
     return db;
 }
 
+template <typename domain_t = ebpf_domain_t>
 static checks_db get_ebpf_report(std::ostream& s, cfg_t& cfg, program_info info,
                                  const ebpf_verifier_options_t* options) {
     global_program_info = std::move(info);
@@ -151,8 +156,8 @@ static checks_db get_ebpf_report(std::ostream& s, cfg_t& cfg, program_info info,
 
     try {
         // Get dictionaries of pre-invariants and post-invariants for each basic block.
-        ebpf_domain_t entry_dom = ebpf_domain_t::setup_entry(true);
-        auto [pre_invariants, post_invariants] = crab::run_forward_analyzer(cfg, std::move(entry_dom));
+        auto entry_dom = domain_t::setup_entry(true);
+        auto [pre_invariants, post_invariants] = crab::run_forward_analyzer<domain_t>(cfg, std::move(entry_dom));
         return get_analysis_report(s, cfg, pre_invariants, post_invariants);
     } catch (std::runtime_error& e) {
         // Convert verifier runtime_error exceptions to failure.
@@ -176,7 +181,8 @@ bool run_ebpf_analysis(std::ostream& s, cfg_t& cfg, const program_info& info, co
     return (report.total_warnings == 0);
 }
 
-static string_invariant_map to_string_invariant_map(crab::invariant_table_t& inv_table) {
+template <typename domain_t = ebpf_domain_t>
+static string_invariant_map to_string_invariant_map(crab::invariant_table_t<domain_t>& inv_table) {
     string_invariant_map res;
     for (auto& [label, inv] : inv_table) {
         res.insert_or_assign(label, inv.to_set());
@@ -184,7 +190,8 @@ static string_invariant_map to_string_invariant_map(crab::invariant_table_t& inv
     return res;
 }
 
-std::tuple<string_invariant, bool> ebpf_analyze_program_for_test(std::ostream& os, const InstructionSeq& prog,
+template <typename domain_t = ebpf_domain_t>
+std::tuple<string_invariant, bool> ebpf_analyze_program_for_test_variant(std::ostream& os, const InstructionSeq& prog,
                                                                  const string_invariant& entry_invariant,
                                                                  const program_info& info,
                                                                  const ebpf_verifier_options_t& options) {
@@ -194,7 +201,7 @@ std::tuple<string_invariant, bool> ebpf_analyze_program_for_test(std::ostream& o
     thread_local_options = options;
     global_program_info = info;
     assert(!entry_invariant.is_bottom());
-    ebpf_domain_t entry_inv = ebpf_domain_t::from_constraints(entry_invariant.value(), options.setup_constraints);
+    auto entry_inv = domain_t::from_constraints(entry_invariant.value(), options.setup_constraints);
     if (entry_inv.is_bottom())
         throw std::runtime_error("Entry invariant is inconsistent");
     cfg_t cfg = prepare_cfg(prog, info, !options.no_simplify, false);
@@ -207,6 +214,20 @@ std::tuple<string_invariant, bool> ebpf_analyze_program_for_test(std::ostream& o
     return {pre_invariant_map.at(label_t::exit), (report.total_warnings == 0)};
 }
 
+std::tuple<string_invariant, bool> ebpf_analyze_program_for_test(std::ostream& os, const InstructionSeq& prog,
+                                                                 const string_invariant& entry_invariant,
+                                                                 const program_info& info,
+                                                                 const ebpf_verifier_options_t& options)
+{
+    if (options.use_value_partitioning) {
+        return ebpf_analyze_program_for_test_variant<ebpf_value_partition_domain_t>(os, prog, entry_invariant, info, options);
+    }
+    else {
+        return ebpf_analyze_program_for_test_variant<ebpf_domain_t>(os, prog, entry_invariant, info, options);
+    }
+}
+
+
 /// Returned value is true if the program passes verification.
 bool ebpf_verify_program(std::ostream& os, const InstructionSeq& prog, const program_info& info,
                          const ebpf_verifier_options_t* options, ebpf_verifier_stats_t* stats) {
@@ -217,7 +238,14 @@ bool ebpf_verify_program(std::ostream& os, const InstructionSeq& prog, const pro
     // in a "passive", non-deterministic form.
     cfg_t cfg = prepare_cfg(prog, info, !options->no_simplify);
 
-    checks_db report = get_ebpf_report(os, cfg, info, options);
+    checks_db report;
+    if (options->use_value_partitioning) {
+        report = get_ebpf_report<ebpf_value_partition_domain_t>(os, cfg, info, options);
+    }
+    else {
+        report = get_ebpf_report<ebpf_domain_t>(os, cfg, info, options);
+    }
+
     if (options->print_failures) {
         print_report(os, report, prog, options->print_line_info);
     }

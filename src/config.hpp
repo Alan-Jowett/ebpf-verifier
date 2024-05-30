@@ -21,6 +21,7 @@ struct ebpf_verifier_options_t {
     bool big_endian;
 
     bool dump_btf_types_json;
+    bool use_value_partitioning;
 };
 
 struct ebpf_verifier_stats_t {
