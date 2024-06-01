@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <string>
+#include <vector>
+
 struct ebpf_verifier_options_t {
     bool check_termination;
     bool assume_assertions;
@@ -21,7 +24,7 @@ struct ebpf_verifier_options_t {
     bool big_endian;
 
     bool dump_btf_types_json;
-    bool use_value_partitioning;
+    std::vector<std::string> partition_keys;
 };
 
 struct ebpf_verifier_stats_t {

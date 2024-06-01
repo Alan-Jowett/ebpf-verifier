@@ -23,8 +23,6 @@
 
 namespace crab {
 
-static std::string partition_key = "packet_size";
-
 ebpf_value_partition_domain_t::ebpf_value_partition_domain_t() : partitions(1) {}
 ebpf_value_partition_domain_t::ebpf_value_partition_domain_t(crab::domains::NumAbsDomain inv,
                                                              crab::domains::array_domain_t stack)
@@ -98,23 +96,7 @@ ebpf_value_partition_domain_t ebpf_value_partition_domain_t::join(const ebpf_val
     // For some reason, the <= operator on is not valid for sort, so we need to use a lambda and explicitly specify the
     // ordering predicate.
     std::sort(partitions.begin(), partitions.end(), [](const auto& lhs, const auto& rhs) {
-        auto lhs_interval = lhs.m_inv[variable_t::make(partition_key)];
-        auto rhs_interval = rhs.m_inv[variable_t::make(partition_key)];
-
-        if (lhs_interval.is_bottom()) {
-            return false;
-        }
-        if (rhs_interval.is_bottom()) {
-            return true;
-        }
-
-        if (lhs_interval.lb() < rhs_interval.lb()) {
-            return true;
-        } else if (lhs_interval.lb() > rhs_interval.lb()) {
-            return false;
-        } else {
-            return lhs_interval.ub() < rhs_interval.ub();
-        }
+        return compare_partitions(lhs, rhs) == partition_comparison_t::LESS_THAN;
     });
 
     // Perform a single pass over the partitions to merge them.
@@ -122,18 +104,17 @@ ebpf_value_partition_domain_t ebpf_value_partition_domain_t::join(const ebpf_val
     // If the packet size interval is different, we start a new partition.
     std::vector<ebpf_domain_t> merged_partitions;
 
-    // First partition is always added.
-    auto packet_size_interval = partitions[0].m_inv[variable_t::make(partition_key)];
-    merged_partitions.push_back(std::move(partitions[0]));
+    // Start with the first partition.
+    auto current_partition = 0;
+    merged_partitions.push_back(partitions[current_partition]);
 
     for (size_t i = 1; i < partitions.size(); i++) {
-        if (partitions[i].m_inv[variable_t::make(partition_key)] == packet_size_interval) {
+        if (compare_partitions(partitions[i], merged_partitions.back()) == partition_comparison_t::EQUAL) {
             // This partition has the same packet size interval as the previous one, merge them.
             merged_partitions.back() |= partitions[i];
         } else {
-            // This partition has a different packet size interval, add it to the list.
-            packet_size_interval = partitions[i].m_inv[variable_t::make(partition_key)];
-            merged_partitions.push_back(std::move(partitions[i]));
+            // Start a new partition.
+            merged_partitions.push_back(partitions[i]);
         }
     }
 
@@ -157,7 +138,8 @@ ebpf_value_partition_domain_t::operator|(const ebpf_value_partition_domain_t& ot
     return join(*this, other);
 }
 
-ebpf_value_partition_domain_t ebpf_value_partition_domain_t::operator|(const ebpf_value_partition_domain_t& other) const && {
+ebpf_value_partition_domain_t
+ebpf_value_partition_domain_t::operator|(const ebpf_value_partition_domain_t& other) const&& {
     return std::move(join(*this, other));
 }
 
@@ -222,9 +204,6 @@ string_invariant ebpf_value_partition_domain_t::to_set() {
 }
 
 void ebpf_value_partition_domain_t::initialize_loop_counter(label_t label) {
-    // Do we really need to merge all partitions here?
-    merge_all_partitions();
-
     for (auto& partition : partitions) {
         partition.initialize_loop_counter(label);
     }
@@ -263,7 +242,7 @@ bool ebpf_value_partition_domain_t::has_same_partitions(const ebpf_value_partiti
     }
 
     for (size_t i = 0; i < partitions.size(); i++) {
-        if (partitions[i].m_inv[variable_t::make(partition_key)] != other.partitions[i].m_inv[variable_t::make(partition_key)]) {
+        if (compare_partitions(partitions[i], other.partitions[i]) != partition_comparison_t::EQUAL) {
             return false;
         }
     }
@@ -286,6 +265,39 @@ void ebpf_value_partition_domain_t::merge_or_apply_to_all_partitions(
             f(partitions[i], other.partitions[i]);
         }
     }
+}
+
+ebpf_value_partition_domain_t::partition_comparison_t
+ebpf_value_partition_domain_t::compare_partitions(const ebpf_domain_t& lhs, const ebpf_domain_t& rhs) {
+    if (!partition_keys.has_value()) {
+        return partition_comparison_t::EQUAL;
+    }
+    // Loop over the partition key and compare each the corresponding interval in the two partitions.
+    for (const auto& partition_key : partition_keys.value()) {
+        auto lhs_interval = lhs.m_inv[variable_t::make(partition_key)];
+        auto rhs_interval = rhs.m_inv[variable_t::make(partition_key)];
+
+        if (lhs_interval.is_bottom()) {
+            if (!rhs_interval.is_bottom()) {
+                return partition_comparison_t::LESS_THAN;
+            }
+        } else if (rhs_interval.is_bottom()) {
+            return partition_comparison_t::GREATER_THAN;
+        } else {
+            if (lhs_interval.lb() < rhs_interval.lb()) {
+                return partition_comparison_t::LESS_THAN;
+            } else if (lhs_interval.lb() > rhs_interval.lb()) {
+                return partition_comparison_t::GREATER_THAN;
+            } else {
+                if (lhs_interval.ub() < rhs_interval.ub()) {
+                    return partition_comparison_t::LESS_THAN;
+                } else if (lhs_interval.ub() > rhs_interval.ub()) {
+                    return partition_comparison_t::GREATER_THAN;
+                }
+            }
+        }
+    }
+    return partition_comparison_t::EQUAL;
 }
 
 } // namespace crab

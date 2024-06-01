@@ -71,6 +71,13 @@ FAIL_UNMARSHAL("invalid", "invalid-lddw.o", ".text")
         VERIFY_SECTION(project, filename, section, nullptr, &g_ebpf_platform_linux, true); \
     }
 
+#define TEST_SECTION_WITH_PARTITION_KEY(project, filename, section, partition_key)                          \
+    TEST_CASE("./check ebpf-samples/" project "/" filename " " section, "[verify][samples][" project "]") { \
+        ebpf_verifier_options_t options = ebpf_verifier_default_options;                                    \
+        options.partition_keys.push_back(partition_key);                                                    \
+        VERIFY_SECTION(project, filename, section, &options, &g_ebpf_platform_linux, true);                 \
+    }
+
 #define TEST_PROGRAM(project, filename, section_name, program_name) \
     TEST_CASE("./check ebpf-samples/" project "/" filename " " program_name, "[verify][samples][" project "]") { \
         VERIFY_PROGRAM(project, filename, section_name, program_name, nullptr, &g_ebpf_platform_linux, true); \
@@ -558,11 +565,11 @@ TEST_SECTION_FAIL("cilium", "bpf_xdp_dsr_linux.o", "2/18")
 TEST_SECTION_FAIL("cilium", "bpf_xdp_snat_linux.o", "2/10")
 TEST_SECTION_FAIL("cilium", "bpf_xdp_snat_linux.o", "2/18")
 
-TEST_SECTION("cilium", "bpf_xdp_dsr_linux.o", "2/19")
-TEST_SECTION("cilium", "bpf_xdp_dsr_linux.o", "2/21")
+TEST_SECTION_WITH_PARTITION_KEY("cilium", "bpf_xdp_dsr_linux.o", "2/19", "packet_size")
+TEST_SECTION_WITH_PARTITION_KEY("cilium", "bpf_xdp_dsr_linux.o", "2/20", "packet_size")
+TEST_SECTION_WITH_PARTITION_KEY("cilium", "bpf_xdp_dsr_linux.o", "2/21", "packet_size")
 
-TEST_SECTION("cilium", "bpf_xdp_snat_linux.o", "2/19")
-TEST_SECTION("cilium", "bpf_xdp_dsr_linux.o", "2/20")
+TEST_SECTION_WITH_PARTITION_KEY("cilium", "bpf_xdp_snat_linux.o", "2/19", "packet_size")
 
 TEST_SECTION_FAIL("cilium", "bpf_xdp_snat_linux.o", "2/7")
 TEST_SECTION_FAIL("cilium", "bpf_xdp_snat_linux.o", "2/15")

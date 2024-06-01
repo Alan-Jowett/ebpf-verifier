@@ -31,6 +31,9 @@ class ebpf_value_partition_domain_t {
     ebpf_value_partition_domain_t(ebpf_domain_t ebpf_domain);
     ebpf_value_partition_domain_t(std::vector<ebpf_domain_t>&& partitions);
 
+    static void set_partition_keys(const std::vector<std::string>& keys) { partition_keys = {keys}; }
+    static void clear_partition_keys() { partition_keys.reset(); }
+
     // Generic abstract domain operations
     static ebpf_value_partition_domain_t top();
     static ebpf_value_partition_domain_t bottom();
@@ -130,7 +133,24 @@ class ebpf_value_partition_domain_t {
     void merge_or_apply_to_all_partitions(const ebpf_value_partition_domain_t& other,
                                           std::function<void(const ebpf_domain_t&, const ebpf_domain_t&)> f) const;
 
+
+    enum class partition_comparison_t {
+        LESS_THAN,
+        EQUAL,
+        GREATER_THAN,
+    };
+
+    /**
+     * @brief Compare two partitions based on the partition keys.
+     *
+     * @param[in] lhs Left-hand side of the comparison.
+     * @param[in] rhs Right-hand side of the comparison.
+     * @return partition_comparison_t The result of the comparison.
+     */
+    static partition_comparison_t compare_partitions(const ebpf_domain_t& lhs, const ebpf_domain_t& rhs);
+
     std::vector<ebpf_domain_t> partitions;
+    inline static thread_local std::optional<std::vector<std::string>> partition_keys = {};
 };
 
 } // namespace crab

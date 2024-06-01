@@ -106,6 +106,7 @@ struct RawTestCase {
     vector<std::tuple<string, vector<string>>> raw_blocks;
     vector<string> post;
     std::set<string> messages;
+    vector<string> partition_keys;
 };
 
 static vector<string> parse_block(const YAML::Node& block_node) {
@@ -139,6 +140,7 @@ static RawTestCase parse_case(const YAML::Node& case_node) {
         .raw_blocks = parse_code(case_node["code"]),
         .post = case_node["post"].as<vector<string>>(),
         .messages = as_set_empty_default(case_node["messages"]),
+        .partition_keys = case_node["partition_keys"].IsDefined() ? case_node["partition_keys"].as<vector<string>>() : vector<string>(),
     };
 }
 
@@ -206,7 +208,8 @@ static TestCase read_case(const RawTestCase& raw_case) {
         .assumed_pre_invariant = read_invariant(raw_case.pre),
         .instruction_seq = raw_cfg_to_instruction_seq(raw_case.raw_blocks),
         .expected_post_invariant = read_invariant(raw_case.post),
-        .expected_messages = raw_case.messages
+        .expected_messages = raw_case.messages,
+        .partition_keys = raw_case.partition_keys,
     };
 }
 
@@ -246,6 +249,8 @@ std::optional<Failure> run_yaml_test_case(TestCase test_case, bool debug) {
         test_case.options.print_invariants = true;
         test_case.options.no_simplify = true;
     }
+
+    test_case.options.partition_keys = test_case.partition_keys;
 
     ebpf_context_descriptor_t context_descriptor{64, 0, 4, -1};
     EbpfProgramType program_type = make_program_type(test_case.name, &context_descriptor);
