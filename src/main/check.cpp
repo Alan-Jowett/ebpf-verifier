@@ -132,6 +132,9 @@ int main(int argc, char** argv) {
     app.add_flag("--line-info", ebpf_verifier_options.print_line_info, "Print line information");
     app.add_flag("--print-btf-types", ebpf_verifier_options.dump_btf_types_json, "Print BTF types");
 
+    std::string partition_variable;
+    app.add_option("--partition-variable", partition_variable, "Partition variable")->type_name("VARIABLE");
+
     std::string asmfile;
     app.add_option("--asm", asmfile, "Print disassembly to FILE")->type_name("FILE");
     std::string dotfile;
@@ -143,6 +146,21 @@ int main(int argc, char** argv) {
     if (verbose)
         ebpf_verifier_options.print_invariants = ebpf_verifier_options.print_failures = true;
     ebpf_verifier_options.allow_division_by_zero = !no_division_by_zero;
+
+    if (!partition_variable.empty()) {
+        // partition_variable is a comma-separated list of variables.
+        std::vector<std::string> partition_keys;
+        boost::split(partition_keys, partition_variable, boost::is_any_of(","));
+        for (const auto& partition_key : partition_keys) {
+            std::vector<std::string> label_and_key;
+            boost::split(label_and_key, partition_key, boost::is_any_of("/"));
+            if (label_and_key.size() != 2) {
+                std::cerr << "Invalid partition variable: " << partition_key << std::endl;
+                return 1;
+            }
+            ebpf_verifier_options.label_to_partition_key[label_and_key[0]] = label_and_key[1];
+        }
+    }
 
     // Enable default conformance groups, which don't include callx or packet.
     ebpf_platform_t platform = g_ebpf_platform_linux;

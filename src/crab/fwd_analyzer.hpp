@@ -11,8 +11,11 @@
 
 namespace crab {
 
-using invariant_table_t = std::map<label_t, ebpf_domain_t>;
+template <typename domain_t>
+using invariant_table_t = std::map<label_t, domain_t>;
 
-std::pair<invariant_table_t, invariant_table_t> run_forward_analyzer(cfg_t& cfg, ebpf_domain_t entry_inv);
+template <typename domain_t = ebpf_domain_t>
+std::pair<invariant_table_t<domain_t>, invariant_table_t<domain_t>> run_forward_analyzer(cfg_t& cfg,
+                                                                                         domain_t entry_inv);
 
 } // namespace crab
