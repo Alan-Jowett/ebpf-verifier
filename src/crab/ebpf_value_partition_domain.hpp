@@ -26,13 +26,20 @@ namespace crab {
  */
 class ebpf_value_partition_domain_t {
   public:
+    class partition_t : public ebpf_domain_t {
+      public:
+        partition_t() = default;
+        partition_t(const std::string& key) : key(key) {}
+        partition_t(ebpf_domain_t&& ebpf_domain) : ebpf_domain_t(std::move(ebpf_domain)) {}
+        partition_t(crab::domains::NumAbsDomain inv, crab::domains::array_domain_t stack) : ebpf_domain_t(inv, stack) {}
+
+        std::optional<std::string> key;
+    };
+
     ebpf_value_partition_domain_t();
     ebpf_value_partition_domain_t(crab::domains::NumAbsDomain inv, crab::domains::array_domain_t stack);
-    ebpf_value_partition_domain_t(ebpf_domain_t ebpf_domain);
-    ebpf_value_partition_domain_t(std::vector<ebpf_domain_t>&& partitions);
-
-    static void set_partition_keys(const std::vector<std::string>& keys) { partition_keys = {keys}; }
-    static void clear_partition_keys() { partition_keys.reset(); }
+    ebpf_value_partition_domain_t(partition_t ebpf_domain);
+    ebpf_value_partition_domain_t(std::vector<partition_t>&& partitions);
 
     // Generic abstract domain operations
     static ebpf_value_partition_domain_t top();
@@ -53,7 +60,7 @@ class ebpf_value_partition_domain_t {
     ebpf_value_partition_domain_t operator&(const ebpf_value_partition_domain_t& other) const;
     ebpf_value_partition_domain_t widen(const ebpf_value_partition_domain_t& other, bool to_constants) const;
     ebpf_value_partition_domain_t widening_thresholds(const ebpf_value_partition_domain_t& other,
-                                                      const crab::iterators::thresholds_t& ts)  const;
+                                                      const crab::iterators::thresholds_t& ts) const;
     ebpf_value_partition_domain_t narrow(const ebpf_value_partition_domain_t& other) const;
 
     typedef bool check_require_func_t(NumAbsDomain&, const linear_constraint_t&, std::string);
@@ -64,6 +71,8 @@ class ebpf_value_partition_domain_t {
     static ebpf_value_partition_domain_t from_constraints(const std::set<std::string>& constraints,
                                                           bool setup_constraints);
     string_invariant to_set();
+
+    void set_key(std::string key) { partition_key = key; }
 
     // abstract transformers
 
@@ -85,7 +94,7 @@ class ebpf_value_partition_domain_t {
         }
         // Remove partitions that became bottom.
         if (partition_became_bottom) {
-            std::vector<ebpf_domain_t> new_partitions;
+            std::vector<partition_t> new_partitions;
             for (auto& partition : partitions) {
                 if (!partition.is_bottom()) {
                     new_partitions.push_back(std::move(partition));
@@ -131,8 +140,7 @@ class ebpf_value_partition_domain_t {
      * @param[in] f Function to apply to each partition.
      */
     void merge_or_apply_to_all_partitions(const ebpf_value_partition_domain_t& other,
-                                          std::function<void(const ebpf_domain_t&, const ebpf_domain_t&)> f) const;
-
+                                          std::function<void(const partition_t&, const partition_t&)> f) const;
 
     enum class partition_comparison_t {
         LESS_THAN,
@@ -147,10 +155,10 @@ class ebpf_value_partition_domain_t {
      * @param[in] rhs Right-hand side of the comparison.
      * @return partition_comparison_t The result of the comparison.
      */
-    static partition_comparison_t compare_partitions(const ebpf_domain_t& lhs, const ebpf_domain_t& rhs);
+    static partition_comparison_t compare_partitions(const partition_t& lhs, const partition_t& rhs);
 
-    std::vector<ebpf_domain_t> partitions;
-    inline static thread_local std::optional<std::vector<std::string>> partition_keys = {};
+    std::vector<partition_t> partitions;
+    std::optional<std::string> partition_key;
 };
 
 } // namespace crab

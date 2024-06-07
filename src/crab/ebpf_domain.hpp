@@ -19,7 +19,7 @@ using NumAbsDomain = domains::NumAbsDomain;
 
 struct reg_pack_t;
 
-class ebpf_domain_t final {
+class ebpf_domain_t {
     struct TypeDomain;
 
     friend class ebpf_value_partition_domain_t;

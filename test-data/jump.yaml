@@ -538,7 +538,7 @@ messages:
 ---
 test-case: lost implications in correlated branches - with packet_size partition
 
-partition_keys: ["packet_size"]
+partition_key: "packet_size"
 
 pre: ["meta_offset=0", "packet_size=[36, 65534]",
       "r1.type=packet", "r1.packet_offset=54",
@@ -579,7 +579,7 @@ post:
 
 messages:
 ---
-partition_keys: ["none"]
+partition_key: "none"
 test-case: lost implications in correlated branches
 
 pre: ["meta_offset=0", "packet_size=[36, 65534]",

@@ -149,7 +149,17 @@ int main(int argc, char** argv) {
 
     if (!partition_variable.empty()) {
         // partition_variable is a comma-separated list of variables.
-        boost::split(ebpf_verifier_options.partition_keys, partition_variable, boost::is_any_of(","));
+        std::vector<std::string> partition_keys;
+        boost::split(partition_keys, partition_variable, boost::is_any_of(","));
+        for (const auto& partition_key : partition_keys) {
+            std::vector<std::string> label_and_key;
+            boost::split(label_and_key, partition_key, boost::is_any_of("/"));
+            if (label_and_key.size() != 2) {
+                std::cerr << "Invalid partition variable: " << partition_key << std::endl;
+                return 1;
+            }
+            ebpf_verifier_options.label_to_partition_key[label_and_key[0]] = label_and_key[1];
+        }
     }
 
     // Enable default conformance groups, which don't include callx or packet.

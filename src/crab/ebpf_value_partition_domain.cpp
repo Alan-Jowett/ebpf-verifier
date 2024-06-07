@@ -28,10 +28,10 @@ ebpf_value_partition_domain_t::ebpf_value_partition_domain_t(crab::domains::NumA
                                                              crab::domains::array_domain_t stack)
     : partitions{{std::move(inv), stack}} {}
 
-ebpf_value_partition_domain_t::ebpf_value_partition_domain_t(ebpf_domain_t ebpf_domain)
+ebpf_value_partition_domain_t::ebpf_value_partition_domain_t(partition_t ebpf_domain)
     : partitions(1, std::move(ebpf_domain)) {}
 
-ebpf_value_partition_domain_t::ebpf_value_partition_domain_t(std::vector<ebpf_domain_t>&& partitions)
+ebpf_value_partition_domain_t::ebpf_value_partition_domain_t(std::vector<partition_t>&& partitions)
     : partitions(std::move(partitions)) {}
 
 // Generic abstract domain operations
@@ -66,21 +66,22 @@ bool ebpf_value_partition_domain_t::operator<=(const ebpf_value_partition_domain
 
     bool return_value = true;
     merge_or_apply_to_all_partitions(
-        other, [&return_value](const ebpf_domain_t& lhs, const ebpf_domain_t& rhs) { return_value &= lhs <= rhs; });
+        other, [&return_value](const partition_t& lhs, const partition_t& rhs) { return_value &= lhs <= rhs; });
 
     return return_value;
 }
 bool ebpf_value_partition_domain_t::operator==(const ebpf_value_partition_domain_t& other) const {
     bool return_value = true;
     merge_or_apply_to_all_partitions(
-        other, [&return_value](const ebpf_domain_t& lhs, const ebpf_domain_t& rhs) { return_value &= lhs == rhs; });
+        other, [&return_value](const partition_t& lhs, const partition_t& rhs) { return_value &= lhs == rhs; });
 
     return return_value;
 }
 
 ebpf_value_partition_domain_t ebpf_value_partition_domain_t::join(const ebpf_value_partition_domain_t& lhs,
                                                                   const ebpf_value_partition_domain_t& rhs) {
-    std::vector<ebpf_domain_t> partitions;
+    std::vector<partition_t> partitions;
+    std::optional<std::string> partition_key = lhs.partition_key;
 
     std::copy_if(lhs.partitions.begin(), lhs.partitions.end(), std::back_inserter(partitions),
                  [](const auto& partition) { return !partition.is_bottom(); });
@@ -90,6 +91,13 @@ ebpf_value_partition_domain_t ebpf_value_partition_domain_t::join(const ebpf_val
 
     if (partitions.empty()) {
         return bottom();
+    }
+
+    // Set the partition key for all partitions.
+    if (partition_key.has_value()) {
+        for (auto& partition : partitions) {
+            partition.key = partition_key;
+        }
     }
 
     // Sort the partitions by the packet size interval.
@@ -102,7 +110,7 @@ ebpf_value_partition_domain_t ebpf_value_partition_domain_t::join(const ebpf_val
     // Perform a single pass over the partitions to merge them.
     // Partitions are sorted by packet size interval, so we can merge adjacent partitions.
     // If the packet size interval is different, we start a new partition.
-    std::vector<ebpf_domain_t> merged_partitions;
+    std::vector<partition_t> merged_partitions;
 
     // Start with the first partition.
     auto current_partition = 0;
@@ -145,26 +153,26 @@ ebpf_value_partition_domain_t::operator|(const ebpf_value_partition_domain_t& ot
 
 ebpf_value_partition_domain_t
 ebpf_value_partition_domain_t::operator&(const ebpf_value_partition_domain_t& other) const {
-    std::vector<ebpf_domain_t> partitions;
+    std::vector<partition_t> partitions;
 
     merge_or_apply_to_all_partitions(
-        other, [&partitions](const ebpf_domain_t& lhs, const ebpf_domain_t& rhs) { partitions.push_back(lhs & rhs); });
+        other, [&partitions](const partition_t& lhs, const partition_t& rhs) { partitions.push_back(lhs & rhs); });
 
     return std::move(partitions);
 }
 ebpf_value_partition_domain_t ebpf_value_partition_domain_t::widen(const ebpf_value_partition_domain_t& other,
                                                                    bool to_constants) const {
-    std::vector<ebpf_domain_t> partitions;
+    std::vector<partition_t> partitions;
     merge_or_apply_to_all_partitions(other,
-                                     [&partitions, to_constants](const ebpf_domain_t& lhs, const ebpf_domain_t& rhs) {
+                                     [&partitions, to_constants](const partition_t& lhs, const partition_t& rhs) {
                                          partitions.push_back(lhs.widen(rhs, to_constants));
                                      });
 
     return std::move(partitions);
 }
 ebpf_value_partition_domain_t ebpf_value_partition_domain_t::narrow(const ebpf_value_partition_domain_t& other) const {
-    std::vector<ebpf_domain_t> partitions;
-    merge_or_apply_to_all_partitions(other, [&partitions](const ebpf_domain_t& lhs, const ebpf_domain_t& rhs) {
+    std::vector<partition_t> partitions;
+    merge_or_apply_to_all_partitions(other, [&partitions](const partition_t& lhs, const partition_t& rhs) {
         partitions.push_back(lhs.narrow(rhs));
     });
 
@@ -186,14 +194,14 @@ bound_t ebpf_value_partition_domain_t::get_loop_count_upper_bound() {
 
 ebpf_value_partition_domain_t ebpf_value_partition_domain_t::setup_entry(bool init_r1) {
     ebpf_value_partition_domain_t abs;
-    abs.partitions[0] = ebpf_domain_t::setup_entry(init_r1);
+    abs.partitions[0] = partition_t::setup_entry(init_r1);
     return abs;
 }
 
 ebpf_value_partition_domain_t ebpf_value_partition_domain_t::from_constraints(const std::set<std::string>& constraints,
                                                                               bool setup_constraints) {
     ebpf_value_partition_domain_t abs;
-    abs.partitions[0] = ebpf_domain_t::from_constraints(constraints, setup_constraints);
+    abs.partitions[0] = partition_t::from_constraints(constraints, setup_constraints);
     return abs;
 }
 
@@ -211,7 +219,7 @@ void ebpf_value_partition_domain_t::initialize_loop_counter(label_t label) {
 
 ebpf_value_partition_domain_t ebpf_value_partition_domain_t::calculate_constant_limits() {
     ebpf_value_partition_domain_t abs;
-    abs.partitions[0] = ebpf_domain_t::calculate_constant_limits();
+    abs.partitions[0] = partition_t::calculate_constant_limits();
     return abs;
 }
 
@@ -252,7 +260,7 @@ bool ebpf_value_partition_domain_t::has_same_partitions(const ebpf_value_partiti
 
 void ebpf_value_partition_domain_t::merge_or_apply_to_all_partitions(
     const ebpf_value_partition_domain_t& other,
-    std::function<void(const ebpf_domain_t&, const ebpf_domain_t&)> f) const {
+    std::function<void(const partition_t&, const partition_t&)> f) const {
     if (!has_same_partitions(other)) {
         ebpf_value_partition_domain_t lhs = *this;
         ebpf_value_partition_domain_t rhs = other;
@@ -268,32 +276,40 @@ void ebpf_value_partition_domain_t::merge_or_apply_to_all_partitions(
 }
 
 ebpf_value_partition_domain_t::partition_comparison_t
-ebpf_value_partition_domain_t::compare_partitions(const ebpf_domain_t& lhs, const ebpf_domain_t& rhs) {
-    if (!partition_keys.has_value()) {
+ebpf_value_partition_domain_t::compare_partitions(const partition_t& lhs, const partition_t& rhs) {
+    auto lhs_key = lhs.key;
+    auto rhs_key = rhs.key;
+
+    if (lhs_key < rhs_key) {
+        return partition_comparison_t::LESS_THAN;
+    } else if (lhs_key > rhs_key) {
+        return partition_comparison_t::GREATER_THAN;
+    }
+    else if (lhs_key == rhs_key && !lhs_key.has_value()) {
         return partition_comparison_t::EQUAL;
     }
-    // Loop over the partition key and compare each the corresponding interval in the two partitions.
-    for (const auto& partition_key : partition_keys.value()) {
-        auto lhs_interval = lhs.m_inv[variable_t::make(partition_key)];
-        auto rhs_interval = rhs.m_inv[variable_t::make(partition_key)];
 
-        if (lhs_interval.is_bottom()) {
-            if (!rhs_interval.is_bottom()) {
-                return partition_comparison_t::LESS_THAN;
-            }
-        } else if (rhs_interval.is_bottom()) {
+    auto partition_key = *lhs_key;
+
+    auto lhs_interval = lhs.m_inv[variable_t::make(partition_key)];
+    auto rhs_interval = rhs.m_inv[variable_t::make(partition_key)];
+
+    if (lhs_interval.is_bottom()) {
+        if (!rhs_interval.is_bottom()) {
+            return partition_comparison_t::LESS_THAN;
+        }
+    } else if (rhs_interval.is_bottom()) {
+        return partition_comparison_t::GREATER_THAN;
+    } else {
+        if (lhs_interval.lb() < rhs_interval.lb()) {
+            return partition_comparison_t::LESS_THAN;
+        } else if (lhs_interval.lb() > rhs_interval.lb()) {
             return partition_comparison_t::GREATER_THAN;
         } else {
-            if (lhs_interval.lb() < rhs_interval.lb()) {
+            if (lhs_interval.ub() < rhs_interval.ub()) {
                 return partition_comparison_t::LESS_THAN;
-            } else if (lhs_interval.lb() > rhs_interval.lb()) {
+            } else if (lhs_interval.ub() > rhs_interval.ub()) {
                 return partition_comparison_t::GREATER_THAN;
-            } else {
-                if (lhs_interval.ub() < rhs_interval.ub()) {
-                    return partition_comparison_t::LESS_THAN;
-                } else if (lhs_interval.ub() > rhs_interval.ub()) {
-                    return partition_comparison_t::GREATER_THAN;
-                }
             }
         }
     }

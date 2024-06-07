@@ -74,7 +74,7 @@ FAIL_UNMARSHAL("invalid", "invalid-lddw.o", ".text")
 #define TEST_SECTION_WITH_PARTITION_KEY(project, filename, section, partition_key)                          \
     TEST_CASE("./check ebpf-samples/" project "/" filename " " section, "[verify][samples][" project "]") { \
         ebpf_verifier_options_t options = ebpf_verifier_default_options;                                    \
-        options.partition_keys.push_back(partition_key);                                                    \
+        options.label_to_partition_key.insert({"*", partition_key});                                             \
         VERIFY_SECTION(project, filename, section, &options, &g_ebpf_platform_linux, true);                 \
     }
 

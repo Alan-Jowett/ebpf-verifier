@@ -10,8 +10,8 @@
 #define YAML_CASE(path) \
     TEST_CASE("YAML suite: " path, "[yaml]") { \
         foreach_suite(path, [&](TestCase test_case){ \
-            if (test_case.partition_keys.size() == 1 && test_case.partition_keys[0] == "none") { \
-                test_case.partition_keys.clear(); \
+            if (test_case.partition_key.empty() || test_case.partition_key == "none") { \
+                test_case.partition_key.clear(); \
             } \
             std::optional<Failure> failure = run_yaml_test_case(test_case); \
             if (failure) { \
@@ -22,21 +22,20 @@
         }); \
     }
 
-#define YAML_CASE_WITH_PARTITION(path, partition) \
-    TEST_CASE("YAML suite: " path " with partition " partition, "[yaml]") { \
-        foreach_suite(path, [&](TestCase test_case){ \
-            if (test_case.partition_keys.size() == 1 && test_case.partition_keys[0] == "none") { \
-                /* Skip test cases that are not partitioned */ \
-                return; \
-            } \
-            test_case.partition_keys = {partition}; \
-            std::optional<Failure> failure = run_yaml_test_case(test_case); \
-            if (failure) { \
-                std::cout << "test case: " << test_case.name << "\n"; \
-                print_failure(*failure, std::cout); \
-            } \
-            REQUIRE(!failure); \
-        }); \
+#define YAML_CASE_WITH_PARTITION(path, partition)                                       \
+    TEST_CASE("YAML suite: " path " with partition " partition, "[yaml]") {             \
+        foreach_suite(path, [&](TestCase test_case) {                                   \
+            if (test_case.partition_key.empty() || test_case.partition_key == "none") { \
+                /* Skip test cases that are not partitioned */                          \
+                return;                                                                 \
+            }                                                                           \
+            std::optional<Failure> failure = run_yaml_test_case(test_case);             \
+            if (failure) {                                                              \
+                std::cout << "test case: " << test_case.name << "\n";                   \
+                print_failure(*failure, std::cout);                                     \
+            }                                                                           \
+            REQUIRE(!failure);                                                          \
+        });                                                                             \
     }
 
 

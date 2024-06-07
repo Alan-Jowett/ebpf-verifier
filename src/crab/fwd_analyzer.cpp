@@ -94,6 +94,17 @@ class interleaved_fwd_fixpoint_iterator_t final {
 
     domain_t join_all_prevs(const label_t& node) {
         domain_t res = domain_t::bottom();
+        // If this is a ebpf_value_partition_domain_t, set the partition key from the thread_options.
+        if constexpr (std::is_same_v<domain_t, ebpf_value_partition_domain_t>) {
+            std::ostringstream oss;
+            oss << node;
+            std::string node_str = oss.str();
+            if (thread_local_options.label_to_partition_key.contains(node_str)) {
+                res.set_key(thread_local_options.label_to_partition_key.at(node_str));
+            }else  if (thread_local_options.label_to_partition_key.contains("*")) {
+                res.set_key(thread_local_options.label_to_partition_key.at("*"));
+            }
+        }
         for (const label_t& prev : _cfg.prev_nodes(node)) {
             res |= get_post(prev);
         }

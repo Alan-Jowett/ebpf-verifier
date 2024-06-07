@@ -3,7 +3,7 @@
 #pragma once
 
 #include <string>
-#include <vector>
+#include <map>
 
 struct ebpf_verifier_options_t {
     bool check_termination;
@@ -24,7 +24,7 @@ struct ebpf_verifier_options_t {
     bool big_endian;
 
     bool dump_btf_types_json;
-    std::vector<std::string> partition_keys;
+    std::map<std::string, std::string> label_to_partition_key;
 };
 
 struct ebpf_verifier_stats_t {

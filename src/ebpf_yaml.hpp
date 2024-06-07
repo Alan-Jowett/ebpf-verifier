@@ -14,7 +14,7 @@ struct TestCase {
     InstructionSeq instruction_seq;
     string_invariant expected_post_invariant;
     std::set<std::string> expected_messages;
-    std::vector<std::string> partition_keys;
+    std::string partition_key;
 };
 
 void foreach_suite(const std::string& path, const std::function<void(const TestCase&)>& f);

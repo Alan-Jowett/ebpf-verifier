@@ -219,8 +219,7 @@ std::tuple<string_invariant, bool> ebpf_analyze_program_for_test(std::ostream& o
                                                                  const program_info& info,
                                                                  const ebpf_verifier_options_t& options)
 {
-    if (!options.partition_keys.empty()) {
-        ebpf_value_partition_domain_t::set_partition_keys(options.partition_keys);
+    if (!options.label_to_partition_key.empty()) {
         return ebpf_analyze_program_for_test_variant<ebpf_value_partition_domain_t>(os, prog, entry_invariant, info, options);
     }
     else {
@@ -240,8 +239,7 @@ bool ebpf_verify_program(std::ostream& os, const InstructionSeq& prog, const pro
     cfg_t cfg = prepare_cfg(prog, info, !options->no_simplify);
 
     checks_db report;
-    if (!options->partition_keys.empty()) {
-        ebpf_value_partition_domain_t::set_partition_keys(options->partition_keys);
+    if (!options->label_to_partition_key.empty()) {
         report = get_ebpf_report<ebpf_value_partition_domain_t>(os, cfg, info, options);
     }
     else {
@@ -265,5 +263,4 @@ void ebpf_verifier_clear_thread_local_state() {
     global_program_info.clear();
     crab::domains::clear_thread_local_state();
     crab::domains::SplitDBM::clear_thread_local_state();
-    crab::ebpf_value_partition_domain_t::clear_partition_keys();
 }
