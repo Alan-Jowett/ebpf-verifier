@@ -21,6 +21,9 @@ struct ebpf_verifier_options_t {
     bool big_endian;
 
     bool dump_btf_types_json;
+
+    // Store pre-invariants for use in ebpf_check_constraints_at_label and ebpf_get_invariants_at_label.
+    bool store_pre_invariants;
 };
 
 struct ebpf_verifier_stats_t {
