@@ -74,11 +74,11 @@ jobs:
       - name: Build
         run: |
           mkdir build
-          if "${{matrix.target}}" == "library" (
+          if ("${{matrix.target}}" -eq "library") {
             cmake -B build -DVERIFIER_ENABLE_TESTS=OFF
-          ) else (
+          } else {
             cmake -B build -DVERIFIER_ENABLE_TESTS=ON
-          )
+          }
           cmake --build build -j $(nproc) --config ${{env.BUILD_CONFIGURATION}}
 
       - name: Run unit tests
