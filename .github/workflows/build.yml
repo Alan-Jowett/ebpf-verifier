@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         configurations: [Debug, Release]
-        build: [library_and_tests, library]
+        target: [tests, library]
     runs-on: ubuntu-latest
     env:
       # Configuration type to build.  For documentation on how build matrices work, see
@@ -38,7 +38,7 @@ jobs:
       - name: Build
         run: |
           mkdir build
-          if [ "${{matrix.build_tests}}" = "library" ]; then
+          if [ "${{matrix.target}}" = "library" ]; then
             cmake -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_CONFIGURATION}} -DVERIFIER_ENABLE_TESTS=OFF
           else
             cmake -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_CONFIGURATION}} -DVERIFIER_ENABLE_TESTS=ON
@@ -46,11 +46,11 @@ jobs:
           cmake --build build -j $(nproc)
 
       - name: Run unit tests
-        if: matrix.build_tests
+        if: ${{matrix.target == 'tests'}}
         run: ./tests -d yes
 
       - name: Test for memory leaks
-        if: ${{matrix.build == 'library_and_tests'}}
+        if: ${{matrix.target == 'tests'}}
         # Any memory leaks will cause the test to fail
         # This BPF program was chosen because it is the largest one in the repo
         run: valgrind --leak-check=full --errors-for-leak-kinds=all  --show-leak-kinds=all --error-exitcode=1 ./check ebpf-samples/cilium/bpf_xdp_snat_linux_v1.o 2/1
@@ -59,7 +59,7 @@ jobs:
     strategy:
       matrix:
         configurations: [Debug, Release]
-        build_tests: [true, false]
+        target: [tests, library]
     runs-on: windows-2022
     env:
       # Configuration type to build.  For documentation on how build matrices work, see
@@ -74,7 +74,7 @@ jobs:
       - name: Build
         run: |
           mkdir build
-          if "${{matrix.build_tests}}" == "false" (
+          if "${{matrix.target}}" == "library" (
             cmake -B build -DVERIFIER_ENABLE_TESTS=OFF
           ) else (
             cmake -B build -DVERIFIER_ENABLE_TESTS=ON
@@ -82,5 +82,5 @@ jobs:
           cmake --build build -j $(nproc) --config ${{env.BUILD_CONFIGURATION}}
 
       - name: Run unit tests
-        if: ${{matrix.build == 'library_and_tests'}}
+        if: ${{matrix.target == 'tests'}}
         run: ./${{env.BUILD_CONFIGURATION}}/tests -d yes
