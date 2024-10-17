@@ -246,7 +246,15 @@ class AssertExtractor {
             }
             return {Assert{TypeConstraint{ins.dst, TypeGroup::number}}};
         }
-        default: return {Assert{TypeConstraint{ins.dst, TypeGroup::number}}};
+        // For all other binary operations, the destination register must be a number and the source must either be a
+        // an immediate or a number.
+        default:
+            if (const auto src = std::get_if<Reg>(&ins.v)) {
+                return {Assert{TypeConstraint{ins.dst, TypeGroup::number}},
+                        Assert{TypeConstraint{*src, TypeGroup::number}}};
+            } else {
+                return {Assert{TypeConstraint{ins.dst, TypeGroup::number}}};
+            }
         }
         assert(false);
     }
