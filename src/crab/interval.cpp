@@ -187,16 +187,18 @@ interval_t interval_t::URem(const interval_t& x) const {
     if (is_bottom() || x.is_bottom()) {
         return bottom();
     }
-    if (const auto n = x.singleton()) {
-        // Divisor is a singleton:
-        //   the linear interval solver can perform many divisions where
-        //   the divisor is a singleton interval. We optimize for this case.
-        number_t c = *n;
-        if (c > number_t{0}) {
-            return interval_t(_lb.URem(bound_t{c}), _ub.URem(bound_t{c}));
+    if (const auto dividend = singleton()) {
+        if (const auto divisor = x.singleton()) {
+            if (dividend->fits_cast_to<uint64_t>() && divisor->fits_cast_to<uint64_t>()) {
+                // The BPF ISA defines modulo by 0 as resulting in the original value.
+                if (*divisor == 0) {
+                    return interval_t(*dividend);
+                }
+                uint64_t dividend_val = dividend->cast_to<uint64_t>();
+                uint64_t divisor_val = divisor->cast_to<uint64_t>();
+                return interval_t(dividend_val % divisor_val);
+            }
         }
-        // The eBPF ISA defines modulo 0 as being unchanged.
-        return *this;
     }
     if (x.contains(0)) {
         // The divisor contains 0.
