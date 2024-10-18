@@ -23,6 +23,10 @@
 using crab::ebpf_domain_t;
 using std::string;
 
+// Maximum number of loop iterations allowed before considering the loop potentially non-terminating.
+// This bound helps detect infinite loops while allowing reasonable finite loops to pass verification.
+const crab::number_t TERMINATION_BOUND = 100000;
+
 thread_local crab::lazy_allocator<program_info> global_program_info;
 thread_local ebpf_verifier_options_t thread_local_options;
 
@@ -97,7 +101,26 @@ static checks_db generate_report(cfg_t& cfg, const crab::invariant_table_t& pre_
     if (thread_local_options.check_termination) {
         const auto last_inv = post_invariants.at(cfg.exit_label());
         m_db.max_loop_count = last_inv.get_loop_count_upper_bound();
+
+        // If the exit is unreachable, we can't be sure if the program is terminating.
+        // Add a warning to fail the verification.
+        if (last_inv.is_bottom()) {
+            m_db.add_warning(label_t::exit, "Exit is unreachable.");
+        }
+
+        // Check if the loop count breached the termination bound.
+        // If so, add a warning to fail the verification.
+        if (m_db.max_loop_count > TERMINATION_BOUND) {
+            if (m_db.max_loop_count.number().has_value()) {
+                m_db.add_warning(label_t::exit, "Could not prove termination (loop count is " +
+                                                    m_db.max_loop_count.number()->to_string() + " but limit is " +
+                                                    TERMINATION_BOUND.to_string() + ").");
+            } else {
+                m_db.add_warning(label_t::exit, "Could not prove termination (maximum loop count is unknown).");
+            }
+        }
     }
+
     return m_db;
 }
 
@@ -127,10 +150,6 @@ static void print_report(std::ostream& os, const checks_db& db, const Instructio
         }
     }
     os << "\n";
-    const crab::number_t max_loop_count{100000};
-    if (db.max_loop_count > max_loop_count) {
-        os << "Could not prove termination.\n";
-    }
 }
 
 static checks_db get_analysis_report(std::ostream& s, cfg_t& cfg, const crab::invariant_table_t& pre_invariants,
