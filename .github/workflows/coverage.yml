@@ -42,7 +42,7 @@ jobs:
       - name: Generate code coverage report
         run: |
           mkdir coverage
-          lcov --capture --directory build --include '*/ebpf-verifier/src/*' --output-file coverage/lcov.info
+          lcov --ignore-errors all --capture --directory build --include '*/ebpf-verifier/src/*' --output-file coverage/lcov.info
 
       - name: Coveralls Parallel
         uses: coverallsapp/github-action@master
