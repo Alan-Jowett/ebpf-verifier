@@ -210,7 +210,7 @@ class SplitDBM final {
 
     [[nodiscard]]
     SplitDBM widening_thresholds(const SplitDBM& o, const iterators::thresholds_t&) const {
-        // TODO: use thresholds. For now, make thresholds an anonymous argument to avoid unused parameter warning.
+        // TODO: use thresholds. Threshold is anonymous until used to prevent unused parameter warning.
         return this->widen(o);
     }
 
