@@ -63,6 +63,8 @@ static void test_conformance(const std::string& filename, const bpf_conformance_
         test_conformance(filename, bpf_conformance_test_result_t::TEST_RESULT_ERROR, "r0 value is range " range); \
     }
 
+// Tests that are known to fail today and need investigation (potential bugs).
+// Unlike TEST_CONFORMANCE_VERIFICATION_FAILED, these are not expected-safe failures.
 #define TEST_CONFORMANCE_FAIL(filename, expected_reason)                                              \
     TEST_CASE("conformance_check " filename, "[conformance]") {                                       \
         test_conformance(filename, bpf_conformance_test_result_t::TEST_RESULT_FAIL, expected_reason); \
