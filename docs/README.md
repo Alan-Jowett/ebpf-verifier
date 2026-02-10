@@ -16,6 +16,7 @@ This documentation provides a comprehensive guide to understanding the Prevail e
 | [Building](building.md) | Build instructions for all platforms |
 | [Testing](testing.md) | Test infrastructure and conformance testing |
 | [Glossary](glossary.md) | Terminology and definitions |
+| [LLM Context](llm-context.md) | Guide for LLM-assisted failure diagnosis |
 
 ## What is Prevail?
 
@@ -120,3 +121,19 @@ src/
 - [RFC 9669](https://www.rfc-editor.org/rfc/rfc9669.html) - BPF Instruction Set Architecture
 - Cousot & Cousot (1977) - Abstract Interpretation foundations
 - Bourdoncle (1993) - Efficient chaotic iteration strategies (WTO)
+
+## LLM-Assisted Diagnosis
+
+When verification fails, you can use an LLM to help diagnose the issue.
+
+**Quick start** (with GitHub Copilot CLI):
+```
+Using docs/llm-context.md, run ./bin/check <your-program.o> <section> -v and diagnose the failure.
+```
+
+**Manual approach** (with any LLM):
+1. Run the verifier with verbose output: `./bin/check program.o section -v`
+2. Copy the contents of `docs/llm-context.md` into your LLM conversation
+3. Paste the verification error and ask for diagnosis
+
+See [llm-context.md](llm-context.md) for the context document and [test-data/llm-context-tests.md](../test-data/llm-context-tests.md) for validated test cases.
