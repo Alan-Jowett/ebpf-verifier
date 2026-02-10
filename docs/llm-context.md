@@ -52,7 +52,7 @@ Each register has multiple abstract properties:
 
 | Property | Meaning |
 |----------|---------|
-| `r<N>.type` | Type: `number`, `ctx`, `stack`, `packet`, `shared`, `map_fd`, or `map_programs` |
+| `r<N>.type` | Type: `number`, `ctx`, `stack`, `packet`, `shared`, `map_fd`, or `map_fd_programs` |
 | `r<N>.svalue` | Signed value or interval `[min, max]` |
 | `r<N>.uvalue` | Unsigned value or interval `[min, max]` |
 | `r<N>.ctx_offset` | Offset within context struct (if type=ctx) |
@@ -79,7 +79,7 @@ Stack memory is tracked separately:
 | `s[N].ctx_offset` | If a pointer is stored, its ctx_offset |
 | `s[N].packet_offset` | If a pointer is stored, its packet_offset |
 
-Stack offsets are from the *base* of the stack frame (0-511 for main program).
+Stack offsets `N` in `s[N]` / `s[N...M]` are absolute byte offsets within the total eBPF stack (`0..EBPF_TOTAL_STACK_SIZE-1`). For a given program point, the active stack frame is the interval `[r10.stack_offset-EBPF_SUBPROGRAM_STACK_SIZE, r10.stack_offset)`.
 
 ### 2.4 Global State Variables
 
@@ -124,17 +124,17 @@ Where:
 | `packet` | Pointer to packet data |
 | `shared` | Pointer to shared memory (e.g., map values) |
 | `map_fd` | Map file descriptor (not directly dereferenceable) |
-| `map_programs` | Program array map FD |
+| `map_fd_programs` | Program array map FD |
 
 ### Type Groups
 
 | Group | Members |
 |-------|---------|
 | `pointer` | ctx, stack, packet, shared |
-| `singleton_ptr` | Pointers to unique memory regions (ctx, stack, packet, map_fd) |
-| `mem` | ctx, stack, packet, shared (memory that can be read/written) |
-| `mem_or_num` | number, ctx, stack, packet, shared |
-| `ptr_or_num` | All types except uninitialized |
+| `singleton_ptr` | Pointers to unique memory regions (ctx, stack, packet) |
+| `mem` | packet, stack, shared (memory that can be read/written) |
+| `mem_or_num` | number, stack, packet, shared |
+| `ptr_or_num` | number, ctx, stack, packet, shared (excluding map FD types) |
 
 ### Common Assertions
 
@@ -398,7 +398,7 @@ Run with `-v` flag for verbose output showing invariants at each step:
 
 Request the full disassembly to see surrounding instructions:
 ```bash
-./bin/check <elf-file> <section> --print-disasm
+./bin/check <elf-file> <section> --asm <disasm-file>
 ```
 
 ### Specific Invariant
@@ -419,9 +419,9 @@ For map-related errors, request:
 
 ## 7. Version Information
 
-- **Prevail Version**: Check with `./bin/check --version`
+- **Prevail Build Identifier**: From the repository root, run `git describe --tags --always --dirty` (or `git rev-parse HEAD`) to record the verifier build/commit.
 - **Document Version**: 1.0
-- **Last Updated**: 2024
+- **Last Updated**: 2026-02-10
 
 ---
 
@@ -440,7 +440,7 @@ For map-related errors, request:
 
 - Main program: offsets 0-511 (accessed as r10-1 through r10-512)
 - Subprograms: additional 512 bytes per call depth
-- Total: up to 8KB (16 frames × 512 bytes)
+- Total: up to 4KB (8 frames × 512 bytes)
 
 ### Common Helper Patterns
 
@@ -456,6 +456,146 @@ if (data + sizeof(struct hdr) > data_end) return XDP_DROP;
 if (divisor == 0) return 0;
 result = dividend / divisor;
 ```
+
+---
+
+## Appendix B: Extended Context for Advanced Diagnosis
+
+### Path-Insensitive Semantics
+
+Prevail uses a single abstract state per program point. All control-flow paths merge into this state.
+
+**Key Properties:**
+- No path-sensitive refinement
+- Correlated conditions are not preserved
+- Pointer and numeric constraints collapse at joins
+- Loop bodies merge with their own entry state
+
+**Example: Correlated Branch Collapse**
+```c
+if (x < 10) {
+    y = x + 1;
+}
+if (y < 11) {
+    // Linux: safe
+    // Prevail: y = [-inf, +inf]
+}
+```
+
+After the first if, Prevail merges the "taken" and "not taken" paths:
+- y is either x+1 or uninitialized
+- The join produces y = unknown
+
+### Widening and Narrowing Behavior
+
+Prevail applies widening to ensure termination of abstract interpretation.
+
+**When Widening Occurs:**
+- At loop headers
+- When intervals grow across iterations
+- When pointer offsets cannot be proven stable
+
+**Effects:**
+- Loop counters lose precision
+- Pointer bounds become unbounded
+- Relational constraints disappear
+
+**Example:**
+```c
+for (i = 0; i < n; i++) {
+    ptr = base + i;
+}
+```
+After widening:
+- i = [-inf, +inf]
+- ptr = base + unknown
+
+### Pointer Provenance Rules
+
+Prevail tracks pointer provenance strictly:
+
+- Pointers belong to regions: stack, map value, packet, shared memory
+- Pointer-to-pointer storage collapses provenance
+- Arithmetic must stay within the same region
+- Subtracting pointers yields a number and destroys provenance
+
+**Example: Storing a Stack Pointer**
+```c
+*(u64 *)buf = (u64)stack_ptr;
+```
+After this:
+- The stored value is a number
+- Reloading it yields a number, not a pointer
+- Any use as a pointer fails
+
+### Subprogram and Call-Frame Semantics
+
+**Register Rules:**
+- r1–r5: arguments
+- r0: return value
+- r6–r9: callee-saved
+- r10: frame pointer (read-only)
+
+**Stack Behavior:**
+- Each subprogram has its own stack frame
+- Stack offsets are validated per frame
+- Returning merges the callee's exit state into the caller
+
+**Common Failure:**
+Using r6 as a pointer without reinitializing after a call.
+
+### Helper Function Contracts
+
+Prevail enforces helper contracts strictly.
+
+**Contract Components:**
+- Argument types (pointer, scalar, map handle)
+- Required bounds
+- Return type (pointer, scalar, nullable pointer)
+- Side effects (packet size changes, map value lifetime)
+
+**Example: bpf_map_lookup_elem**
+- r1: map handle (scalar)
+- r2: pointer to key (stack or packet)
+- Returns:
+  - pointer to map value (shared region), or
+  - NULL
+
+LLMs must check:
+- key pointer validity
+- key size
+- map value pointer provenance
+
+### Differences Between Linux and Prevail
+
+Prevail is intentionally more conservative.
+
+| Feature | Linux Verifier | Prevail |
+|--------|----------------|---------|
+| Path sensitivity | Yes | No |
+| Relational constraints | Some | None |
+| Loop unrolling | Aggressive | None |
+| Pointer tracking | Fine-grained | Region-based |
+| Stack modeling | Per-path | Merged |
+
+LLMs must not assume Linux-accepted code will pass Prevail.
+
+### Canonical Fix Patterns
+
+**Loop Fixes:**
+- Use fixed upper bounds
+- Hoist bounds checks outside loops
+- Avoid induction variables tied to pointer offsets
+
+**Pointer Fixes:**
+- Avoid storing pointers in memory
+- Recompute pointers from base + constant offsets
+- Use helper-returned pointers directly
+
+**Map Access Fixes:**
+- Validate key pointers explicitly
+- Avoid pointer arithmetic on map values
+- Copy map values to stack if needed
 
 ---
 
