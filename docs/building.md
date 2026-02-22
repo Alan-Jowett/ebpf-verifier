@@ -37,8 +37,8 @@ brew install cmake boost yaml-cpp
 ## Getting the Source
 
 ```bash
-git clone --recurse-submodules https://github.com/vbpf/ebpf-verifier.git
-cd ebpf-verifier
+git clone --recurse-submodules https://github.com/vbpf/prevail.git
+cd prevail
 ```
 
 If you already cloned without submodules:
@@ -66,7 +66,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 
 # Binaries are in bin/
-./bin/check --help
+./bin/prevail --help
 ```
 
 ### Windows (Command Line)
@@ -79,7 +79,7 @@ cmake -S . -B build
 cmake --build build --config Release
 
 # Binaries are in bin/
-.\bin\check.exe --help
+.\bin\prevail.exe --help
 ```
 
 ### Windows (Visual Studio)
@@ -89,7 +89,7 @@ cmake --build build --config Release
 cmake -S . -B build -G "Visual Studio 17 2022"
 
 # Open in Visual Studio
-start build\ebpf-verifier.sln
+start build\prevail.sln
 
 # Or build from command line
 cmake --build build --config Release
@@ -118,7 +118,8 @@ After building, you'll find these executables in `bin/`:
 
 | Executable | Description |
 |------------|-------------|
-| `check` | Main verifier CLI tool |
+| `prevail` | Main verifier CLI tool |
+| `check` | Backwards-compatible alias for `prevail` |
 | `tests` | Catch2 test runner |
 | `run_yaml` | YAML test case runner |
 
@@ -159,13 +160,13 @@ For a reproducible build environment:
 docker build -t prevail .
 
 # Run the verifier
-docker run --rm prevail ./check --help
+docker run --rm prevail ./prevail --help
 
 # Run tests
 docker run --rm prevail ./tests
 
 # Verify a program (mount your files)
-docker run --rm -v $(pwd)/samples:/samples prevail ./check /samples/prog.o 2/1
+docker run --rm -v $(pwd)/samples:/samples prevail ./prevail /samples/prog.o 2/1
 ```
 
 ## Development Build
