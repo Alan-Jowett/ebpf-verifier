@@ -69,6 +69,8 @@ struct ProgramInfo {
     std::set<int32_t> callback_targets_with_exit{};
     // Raw per-program instruction indices rewritten from builtin relocations.
     std::set<size_t> builtin_call_offsets{};
+    // Mapping from instruction offset to the original symbol name for builtin calls.
+    std::map<size_t, std::string> builtin_call_names{};
 };
 
 struct RawProgram {

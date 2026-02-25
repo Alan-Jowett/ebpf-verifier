@@ -390,8 +390,8 @@ struct Unmarshaller {
     }
 
     [[nodiscard]]
-    auto makeLddw(const EbpfInst inst, const int32_t next_imm, const vector<EbpfInst>& insts, const Pc pc) const
-        -> Instruction {
+    auto makeLddw(const EbpfInst inst, const int32_t next_imm, const vector<EbpfInst>& insts,
+                  const Pc pc) const -> Instruction {
         if (pc >= insts.size() - 1) {
             throw InvalidInstruction(pc, "incomplete lddw");
         }
@@ -680,16 +680,27 @@ struct Unmarshaller {
             if (inst.dst != 0) {
                 throw InvalidInstruction(pc, make_opcode_message("nonzero dst for register", inst.opcode));
             }
-            if (info.builtin_call_offsets.contains(pc)) {
+            if (info.builtin_call_names.contains(pc)) {
                 if (info.platform->get_builtin_call) {
-                    if (const auto builtin_call = info.platform->get_builtin_call(inst.imm)) {
+                    if (auto builtin_call = info.platform->get_builtin_call(inst.imm)) {
+                        // Only mark as unsupported if it's an unresolved external (extern_unspecified).
+                        // Known builtins like memset should remain supported.
+                        if (builtin_call->name == "extern_unspecified") {
+                            // Use the original symbol name for the error message.
+                            const auto& symbol_name = info.builtin_call_names.at(pc);
+                            builtin_call->name = symbol_name;
+                            builtin_call->is_supported = false;
+                            builtin_call->unsupported_reason = "unresolved external function '" + symbol_name + "'";
+                        }
                         return *builtin_call;
                     }
                 }
+                // Platform doesn't recognize the builtin ID - mark as unsupported.
+                const auto& name = info.builtin_call_names.at(pc);
                 return Call{.func = inst.imm,
-                            .name = std::to_string(inst.imm),
+                            .name = name,
                             .is_supported = false,
-                            .unsupported_reason = "helper function is unavailable on this platform"};
+                            .unsupported_reason = "unresolved external function '" + name + "'"};
             }
             if (!info.platform->is_helper_usable(inst.imm)) {
                 std::string name = std::to_string(inst.imm);

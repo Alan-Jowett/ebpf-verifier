@@ -374,6 +374,9 @@ std::string ProgramReader::append_subprograms(RawProgram& prog) {
                 for (const size_t builtin_offset : sub->info.builtin_call_offsets) {
                     prog.info.builtin_call_offsets.insert(base + builtin_offset);
                 }
+                for (const auto& [offset, name] : sub->info.builtin_call_names) {
+                    prog.info.builtin_call_names[base + offset] = name;
+                }
             } else {
                 return "Subprogram not found: " + target_function_name;
             }
@@ -460,6 +463,7 @@ bool ProgramReader::try_reloc(const std::string& symbol_name, const ELFIO::Elf_H
                 instruction_to_relocate.imm = *builtin_id;
                 if (*builtin_id < 0) {
                     builtin_offsets_for_current_program.insert(location);
+                    builtin_names_for_current_program[location] = symbol_name;
                 }
                 return true;
             }
@@ -614,6 +618,7 @@ void ProgramReader::read_programs() {
         const auto prog_type = parse_params.platform->get_program_type(sec_name, parse_params.path);
         for (ELFIO::Elf_Xword offset = 0; offset < sec->get_size();) {
             builtin_offsets_for_current_program.clear();
+            builtin_names_for_current_program.clear();
             auto [name, symbol_size] = get_program_name_and_size(*sec, offset, symbols);
             const auto extracted_size = compute_reachable_program_span(section_instructions, offset, symbol_size);
             auto instructions = vector_of<EbpfInst>(sec->get_data() + offset, extracted_size);
@@ -627,6 +632,7 @@ void ProgramReader::read_programs() {
                 .map_descriptors = global.map_descriptors,
                 .type = prog_type,
                 .builtin_call_offsets = std::move(builtin_offsets_for_current_program),
+                .builtin_call_names = std::move(builtin_names_for_current_program),
             };
             raw_programs.emplace_back(RawProgram{
                 parse_params.path,
