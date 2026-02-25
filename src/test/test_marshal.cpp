@@ -913,7 +913,7 @@ TEST_CASE("unmarshal builtin calls only when relocation-gated", "[disasm][marsha
     REQUIRE_FALSE(ungated.is_supported);
     REQUIRE(ungated.unsupported_reason == "helper function is unavailable on this platform");
 
-    info.builtin_call_offsets.insert(0);
+    info.builtin_call_names[0] = "memset";
     const Call gated = unmarshal_single_call(call_memset, info);
     REQUIRE(gated.is_supported);
     REQUIRE(gated.name == "memset");

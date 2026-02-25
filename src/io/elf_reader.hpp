@@ -160,6 +160,8 @@ class ProgramReader {
     /// Only negative IDs are platform-internal builtins needing the gate;
     /// positive IDs are standard BPF helpers handled via normal prototype lookup.
     std::set<size_t> builtin_offsets_for_current_program;
+    /// Maps builtin call offsets to their original symbol names.
+    std::map<size_t, std::string> builtin_names_for_current_program;
 
     // loop detection for recursive subprogram resolution
     std::map<const RawProgram*, bool> resolved_subprograms;
