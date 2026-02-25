@@ -132,7 +132,7 @@ static const EbpfInstructionTemplate instruction_template[] = {
     {{0x84, DST, 0, 0, 0}, bpf_conformance_groups_t::base32},
     {{0x85, 0, 0, 0, HELPER_ID}, bpf_conformance_groups_t::base32},
     {{0x85, 0, 1, 0, JMP_OFFSET}, bpf_conformance_groups_t::base32},
-    {{0x85, 0, 2, 0, IMM}, bpf_conformance_groups_t::base32},
+    {{0x85, 0, 2, MEM_OFFSET, IMM}, bpf_conformance_groups_t::base32},
     {{0x87, DST, 0, 0, 0}, bpf_conformance_groups_t::base64},
     {{0x89, DST, SRC, MEM_OFFSET, 0}, bpf_conformance_groups_t::base64},
     {{0x8d, DST, 0, 0, 0}, bpf_conformance_groups_t::callx},
@@ -716,8 +716,8 @@ static void check_instruction_offset_variations(const EbpfInstructionTemplate& p
         inst.offset++;
         if (!next_template || !matches_template_inst(inst, next_template->inst)) {
             std::ostringstream oss;
-            if (inst.offset == 1 &&
-                (!next_template || next_template->inst.opcode != inst.opcode || next_template->inst.offset == 0)) {
+            if (inst.offset == 1 && (!next_template || next_template->inst.opcode != inst.opcode ||
+                                     next_template->inst.offset == 0 || next_template->inst.offset == MEM_OFFSET)) {
                 oss << "0: nonzero offset for op 0x" << std::hex << static_cast<int>(inst.opcode) << std::endl;
             } else {
                 oss << "0: invalid offset for op 0x" << std::hex << static_cast<int>(inst.opcode) << std::endl;
@@ -893,6 +893,16 @@ TEST_CASE("unmarshal 64bit immediate", "[disasm][marshal]") {
 TEST_CASE("unmarshal call-btf-id", "[disasm][marshal]") {
     compare_unmarshal_marshal(EbpfInst{.opcode = INST_OP_CALL, .src = INST_CALL_BTF_HELPER, .imm = 17},
                               EbpfInst{.opcode = INST_OP_CALL, .src = INST_CALL_BTF_HELPER, .imm = 17});
+}
+
+TEST_CASE("unmarshal call-btf-id with module offset", "[disasm][marshal]") {
+    compare_unmarshal_marshal(EbpfInst{.opcode = INST_OP_CALL, .src = INST_CALL_BTF_HELPER, .offset = 3, .imm = 17},
+                              EbpfInst{.opcode = INST_OP_CALL, .src = INST_CALL_BTF_HELPER, .offset = 3, .imm = 17});
+}
+
+TEST_CASE("unmarshal call-btf-id rejects negative module offset", "[disasm][marshal]") {
+    check_unmarshal_fail(EbpfInst{.opcode = INST_OP_CALL, .src = INST_CALL_BTF_HELPER, .offset = -1, .imm = 17},
+                         "0: negative module for op 0x85\n");
 }
 
 TEST_CASE("unmarshal builtin calls only when relocation-gated", "[disasm][marshal]") {

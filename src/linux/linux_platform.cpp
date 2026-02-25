@@ -384,6 +384,52 @@ std::optional<int32_t> resolve_builtin_call_linux(const std::string& name) {
     return std::nullopt;
 }
 
+std::optional<KsymBtfId> resolve_ksym_btf_id_linux(const std::string& name) {
+    // Synthetic BTF IDs for test/sample kfunc symbols.  IDs 20001-20012, 21000 are
+    // intentionally NOT in kfunc_prototypes — they exist only to exercise the ELF
+    // relocation rewrite path and will fail prototype lookup during verification.
+    // IDs 1009-1010 (cpumask) have prototype entries and will verify.
+    // In production, the platform callout resolves to real kernel/module BTF IDs.
+    if (name == "bpf_skb_ct_lookup") {
+        return KsymBtfId{.btf_id = 20001, .module = 0};
+    }
+    if (name == "bpf_ct_release") {
+        return KsymBtfId{.btf_id = 20002, .module = 0};
+    }
+    if (name == "bpf_fentry_test1") {
+        return KsymBtfId{.btf_id = 20003, .module = 0};
+    }
+    if (name == "bpf_cpumask_create") {
+        return KsymBtfId{.btf_id = 1009, .module = 0};
+    }
+    if (name == "bpf_cpumask_release") {
+        return KsymBtfId{.btf_id = 1010, .module = 0};
+    }
+    if (name == "bpf_kfunc_call_test_mem_len_pass1") {
+        return KsymBtfId{.btf_id = 20007, .module = 0};
+    }
+    if (name == "tcp_cong_avoid_ai") {
+        return KsymBtfId{.btf_id = 20008, .module = 0};
+    }
+    if (name == "tcp_reno_cong_avoid") {
+        return KsymBtfId{.btf_id = 20009, .module = 0};
+    }
+    if (name == "tcp_reno_undo_cwnd") {
+        return KsymBtfId{.btf_id = 20010, .module = 0};
+    }
+    if (name == "tcp_slow_start") {
+        return KsymBtfId{.btf_id = 20011, .module = 0};
+    }
+    if (name == "bpf_map_sum_elem_count") {
+        return KsymBtfId{.btf_id = 20012, .module = 0};
+    }
+    if (name == "bpf_testmod_test_mod_kfunc") {
+        return KsymBtfId{.btf_id = 21000, .module = 1};
+    }
+
+    return std::nullopt;
+}
+
 static std::optional<Call> get_builtin_call_linux(const int32_t id) {
     switch (id) {
     case LINUX_BUILTIN_CALL_MEMSET:
@@ -434,6 +480,7 @@ const ebpf_platform_t g_ebpf_platform_linux = {
     .get_helper_prototype = get_helper_prototype_linux,
     .is_helper_usable = is_helper_usable_linux,
     .resolve_builtin_call = resolve_builtin_call_linux,
+    .resolve_ksym_btf_id = resolve_ksym_btf_id_linux,
     .get_builtin_call = get_builtin_call_linux,
     .resolve_kfunc_call = resolve_kfunc_call_linux,
     .map_record_size = sizeof(BpfLoadMapDef),

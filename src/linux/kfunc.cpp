@@ -22,7 +22,7 @@ struct KfuncPrototypeEntry {
     bool requires_privileged;
 };
 
-constexpr std::array<KfuncPrototypeEntry, 10> kfunc_prototypes{{
+constexpr std::array<KfuncPrototypeEntry, 12> kfunc_prototypes{{
     {
         12,
         EbpfHelperPrototype{
@@ -170,6 +170,38 @@ constexpr std::array<KfuncPrototypeEntry, 10> kfunc_prototypes{{
             .unsupported = false,
         },
         KfuncFlags::release,
+        "",
+        false,
+    },
+    // bpf_cpumask_create/bpf_cpumask_release form an acquire/release pair.
+    // Acquire without enforced release — verifier does not yet track release obligations (see ID 1010).
+    {
+        1009,
+        EbpfHelperPrototype{
+            .name = "bpf_cpumask_create",
+            .return_type = EBPF_RETURN_TYPE_INTEGER,
+            .argument_type = {EBPF_ARGUMENT_TYPE_DONTCARE, EBPF_ARGUMENT_TYPE_DONTCARE, EBPF_ARGUMENT_TYPE_DONTCARE,
+                              EBPF_ARGUMENT_TYPE_DONTCARE, EBPF_ARGUMENT_TYPE_DONTCARE},
+            .reallocate_packet = false,
+            .context_descriptor = nullptr,
+            .unsupported = false,
+        },
+        KfuncFlags::acquire,
+        "",
+        false,
+    },
+    {
+        1010,
+        EbpfHelperPrototype{
+            .name = "bpf_cpumask_release",
+            .return_type = EBPF_RETURN_TYPE_INTEGER,
+            .argument_type = {EBPF_ARGUMENT_TYPE_DONTCARE, EBPF_ARGUMENT_TYPE_DONTCARE, EBPF_ARGUMENT_TYPE_DONTCARE,
+                              EBPF_ARGUMENT_TYPE_DONTCARE, EBPF_ARGUMENT_TYPE_DONTCARE},
+            .reallocate_packet = false,
+            .context_descriptor = nullptr,
+            .unsupported = false,
+        },
+        KfuncFlags::none, // release semantics not yet enforced by verifier
         "",
         false,
     },

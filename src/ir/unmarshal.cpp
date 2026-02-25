@@ -390,8 +390,8 @@ struct Unmarshaller {
     }
 
     [[nodiscard]]
-    auto makeLddw(const EbpfInst inst, const int32_t next_imm, const vector<EbpfInst>& insts, const Pc pc) const
-        -> Instruction {
+    auto makeLddw(const EbpfInst inst, const int32_t next_imm, const vector<EbpfInst>& insts,
+                  const Pc pc) const -> Instruction {
         if (pc >= insts.size() - 1) {
             throw InvalidInstruction(pc, "incomplete lddw");
         }
@@ -658,10 +658,10 @@ struct Unmarshaller {
             if (inst.src > INST_CALL_BTF_HELPER) {
                 throw InvalidInstruction(pc, inst.opcode);
             }
-            if (inst.offset != 0) {
-                throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
-            }
             if (inst.src == INST_CALL_LOCAL) {
+                if (inst.offset != 0) {
+                    throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
+                }
                 return makeCallLocal(inst, insts, pc);
             }
             if (inst.opcode & INST_SRC_REG) {
@@ -669,16 +669,25 @@ struct Unmarshaller {
                 if (inst.src != 0) {
                     throw InvalidInstruction(pc, inst.opcode);
                 }
+                if (inst.offset != 0) {
+                    throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
+                }
                 return makeCallx(inst, pc);
             }
             if (inst.src == INST_CALL_BTF_HELPER) {
                 if (inst.dst != 0) {
                     throw InvalidInstruction(pc, make_opcode_message("nonzero dst for register", inst.opcode));
                 }
-                return CallBtf{.btf_id = inst.imm};
+                if (inst.offset < 0) {
+                    throw InvalidInstruction(pc, make_opcode_message("negative module for", inst.opcode));
+                }
+                return CallBtf{.btf_id = inst.imm, .module = inst.offset};
             }
             if (inst.dst != 0) {
                 throw InvalidInstruction(pc, make_opcode_message("nonzero dst for register", inst.opcode));
+            }
+            if (inst.offset != 0) {
+                throw InvalidInstruction(pc, make_opcode_message("nonzero offset for", inst.opcode));
             }
             if (info.builtin_call_offsets.contains(pc)) {
                 if (info.platform->get_builtin_call) {

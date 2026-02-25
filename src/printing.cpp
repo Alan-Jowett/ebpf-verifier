@@ -523,7 +523,12 @@ struct CommandPrinterVisitor {
 
     void operator()(Callx const& callx) { os_ << "callx " << callx.func; }
 
-    void operator()(CallBtf const& call) { os_ << "call_btf " << call.btf_id; }
+    void operator()(CallBtf const& call) {
+        os_ << "call_btf " << call.btf_id;
+        if (call.module != 0) {
+            os_ << " module " << call.module;
+        }
+    }
 
     void operator()(Exit const& b) { os_ << "exit"; }
 
