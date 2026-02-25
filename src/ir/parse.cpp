@@ -1,10 +1,13 @@
 // Copyright (c) Prevail Verifier contributors.
 // SPDX-License-Identifier: MIT
 #include <cassert>
+#include <limits>
 #include <map>
 #include <regex>
 #include <sstream>
 #include <string>
+
+#include <gsl/narrow>
 
 #include "arith/dsl_syntax.hpp"
 #include "arith/linear_constraint.hpp"
@@ -170,6 +173,13 @@ Instruction parse_instruction(const std::string& line, const std::map<std::strin
     }
     if (regex_match(text, m, regex("callx " REG))) {
         return Callx{reg(m[1])};
+    }
+    if (regex_match(text, m, regex("call_btf " FUNC R"_(\s+module\s+)_" IMM))) {
+        const auto module_val = to_int(m[2]);
+        if (module_val < 0 || module_val > std::numeric_limits<int16_t>::max()) {
+            throw std::invalid_argument("module value out of range in call_btf");
+        }
+        return CallBtf{.btf_id = to_int(m[1]), .module = gsl::narrow<int16_t>(module_val)};
     }
     if (regex_match(text, m, regex("call_btf " FUNC))) {
         return CallBtf{.btf_id = to_int(m[1])};

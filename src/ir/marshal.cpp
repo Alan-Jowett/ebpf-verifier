@@ -219,7 +219,7 @@ struct MarshalVisitor {
         return {EbpfInst{.opcode = gsl::narrow<uint8_t>(INST_OP_CALL),
                          .dst = 0,
                          .src = INST_CALL_BTF_HELPER,
-                         .offset = 0,
+                         .offset = b.module,
                          .imm = b.btf_id}};
     }
 

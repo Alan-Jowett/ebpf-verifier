@@ -257,8 +257,12 @@ struct Callx {
 };
 
 /// Call helper by BTF ID (CALL src=2).
+/// The module field (int16_t, matching BPF instruction offset width) identifies
+/// which kernel module provides the kfunc; 0 means vmlinux (the default).
+/// Equality compares both btf_id and module, distinguishing calls to different modules.
 struct CallBtf {
     int32_t btf_id{};
+    int16_t module{};
     constexpr bool operator==(const CallBtf&) const = default;
 };
 

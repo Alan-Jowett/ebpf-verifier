@@ -7,6 +7,7 @@
 // can use to call platform-specific functions.
 
 #include <bpf_conformance_core/bpf_conformance.h>
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -17,6 +18,12 @@
 namespace prevail {
 struct Call;
 
+struct KsymBtfId {
+    int32_t btf_id{};
+    int16_t module{};
+    constexpr bool operator==(const KsymBtfId&) const = default;
+};
+
 typedef EbpfProgramType (*ebpf_get_program_type_fn)(const std::string& section, const std::string& path);
 
 typedef EbpfMapType (*ebpf_get_map_type_fn)(uint32_t platform_specific_type);
@@ -26,6 +33,7 @@ typedef EbpfHelperPrototype (*ebpf_get_helper_prototype_fn)(int32_t n);
 typedef bool (*ebpf_is_helper_usable_fn)(int32_t n);
 
 typedef std::optional<int32_t> (*ebpf_resolve_builtin_call_fn)(const std::string& name);
+typedef std::optional<KsymBtfId> (*ebpf_resolve_ksym_btf_id_fn)(const std::string& name);
 typedef std::optional<Call> (*ebpf_get_builtin_call_fn)(int32_t id);
 
 typedef std::optional<Call> (*ebpf_resolve_kfunc_call_fn)(int32_t btf_id, const ProgramInfo* info,
@@ -50,6 +58,7 @@ struct ebpf_platform_t {
     ebpf_get_helper_prototype_fn get_helper_prototype;
     ebpf_is_helper_usable_fn is_helper_usable;
     ebpf_resolve_builtin_call_fn resolve_builtin_call;
+    ebpf_resolve_ksym_btf_id_fn resolve_ksym_btf_id;
     ebpf_get_builtin_call_fn get_builtin_call;
     ebpf_resolve_kfunc_call_fn resolve_kfunc_call;
 

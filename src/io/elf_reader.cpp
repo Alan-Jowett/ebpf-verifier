@@ -436,9 +436,55 @@ int32_t ProgramReader::compute_lddw_reloc_offset_imm(const ELFIO::Elf_Sxword add
     return gsl::narrow<int32_t>(sym.value + addend);
 }
 
+void ProgramReader::build_ksym_function_resolution_cache() {
+    ksym_function_resolution_cache.clear();
+    const auto* btf_sec = reader.sections[".BTF"];
+    if (!btf_sec || !btf_sec->get_data()) {
+        return;
+    }
+
+    const libbtf::btf_type_data btf_data{vector_of<std::byte>(*btf_sec)};
+
+    const auto ksyms_id = btf_data.get_id(".ksyms");
+    if (ksyms_id == 0) {
+        return;
+    }
+
+    libbtf::btf_kind_data_section ksyms;
+    try {
+        ksyms = btf_data.get_kind_type<libbtf::btf_kind_data_section>(ksyms_id);
+    } catch (const std::exception& e) {
+        throw UnmarshalError(std::string("Unsupported or invalid BTF .ksyms section (id ") + std::to_string(ksyms_id) +
+                             "): " + e.what());
+    }
+
+    for (const auto& member : ksyms.members) {
+        if (btf_data.get_kind_index(member.type) != libbtf::BTF_KIND_FUNCTION) {
+            continue;
+        }
+        libbtf::btf_kind_function function;
+        try {
+            function = btf_data.get_kind_type<libbtf::btf_kind_function>(member.type);
+        } catch (const std::exception& e) {
+            throw UnmarshalError(std::string("Unsupported or invalid BTF .ksyms function (type ") +
+                                 std::to_string(member.type) + "): " + e.what());
+        }
+        if (function.name.empty() || ksym_function_resolution_cache.contains(function.name)) {
+            continue;
+        }
+
+        std::optional<KsymBtfId> resolved;
+        if (parse_params.platform && parse_params.platform->resolve_ksym_btf_id) {
+            resolved = parse_params.platform->resolve_ksym_btf_id(function.name);
+        }
+        ksym_function_resolution_cache.emplace(function.name, resolved);
+    }
+}
+
 bool ProgramReader::try_reloc(const std::string& symbol_name, const ELFIO::Elf_Half symbol_section_index,
-                              const unsigned char symbol_type, std::vector<EbpfInst>& instructions,
-                              const size_t location, const ELFIO::Elf_Word index, const ELFIO::Elf_Sxword addend) {
+                              const unsigned char symbol_type, const unsigned char symbol_bind,
+                              std::vector<EbpfInst>& instructions, const size_t location, const ELFIO::Elf_Word index,
+                              const ELFIO::Elf_Sxword addend) {
     EbpfInst& instruction_to_relocate = instructions[location];
 
     if (symbol_section_index == ELFIO::SHN_UNDEF) {
@@ -454,6 +500,21 @@ bool ProgramReader::try_reloc(const std::string& symbol_name, const ELFIO::Elf_H
 
     // Handle local function calls - queue for post-processing.
     if (instruction_to_relocate.opcode == INST_OP_CALL && instruction_to_relocate.src == INST_CALL_LOCAL) {
+        if (symbol_section_index == ELFIO::SHN_UNDEF) {
+            if (const auto it = ksym_function_resolution_cache.find(symbol_name);
+                it != ksym_function_resolution_cache.end()) {
+                if (it->second.has_value()) {
+                    if (!rewrite_extern_kfunc_call(instruction_to_relocate, *it->second)) {
+                        throw UnmarshalError("Invalid kfunc call rewrite for symbol " + symbol_name +
+                                             ": instruction encoding or resolver output is invalid");
+                    }
+                    return true;
+                }
+                if (symbol_bind != ELFIO::STB_WEAK) {
+                    return false;
+                }
+            }
+        }
         if (symbol_section_index == ELFIO::SHN_UNDEF && parse_params.platform->resolve_builtin_call) {
             if (const auto builtin_id = parse_params.platform->resolve_builtin_call(symbol_name)) {
                 instruction_to_relocate.src = INST_CALL_STATIC_HELPER;
@@ -578,7 +639,7 @@ void ProgramReader::process_relocations(std::vector<EbpfInst>& instructions,
         }
         auto sym = get_symbol_details(symbols, idx);
 
-        if (!try_reloc(sym.name, sym.section_index, sym.type, instructions, loc, idx, addend)) {
+        if (!try_reloc(sym.name, sym.section_index, sym.type, sym.bind, instructions, loc, idx, addend)) {
             unresolved_symbol_errors.push_back(unresolved_symbol_error_t{
                 .section = section_name,
                 .message = "Unresolved external symbol " + (sym.name.empty() ? "<anonymous>" : sym.name) +
@@ -604,6 +665,7 @@ const ELFIO::section* ProgramReader::get_relocation_section(const std::string& n
 
 void ProgramReader::read_programs() {
     resolved_subprograms.clear();
+    build_ksym_function_resolution_cache();
 
     for (const auto& sec : reader.sections) {
         if (!(sec->get_flags() & ELFIO::SHF_EXECINSTR) || !sec->get_size() || !sec->get_data()) {

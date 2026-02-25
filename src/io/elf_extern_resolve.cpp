@@ -112,4 +112,21 @@ bool rewrite_extern_address_load_to_zero(std::vector<EbpfInst>& instructions, co
     return true;
 }
 
+bool rewrite_extern_kfunc_call(EbpfInst& instruction, const KsymBtfId& resolved_target) {
+    if (instruction.opcode != INST_OP_CALL || instruction.src != INST_CALL_LOCAL || instruction.dst != 0) {
+        return false;
+    }
+    if (instruction.offset != 0) {
+        return false;
+    }
+    if (resolved_target.btf_id <= 0 || resolved_target.module < 0) {
+        return false;
+    }
+
+    instruction.src = INST_CALL_BTF_HELPER;
+    instruction.offset = resolved_target.module;
+    instruction.imm = resolved_target.btf_id;
+    return true;
+}
+
 } // namespace prevail
