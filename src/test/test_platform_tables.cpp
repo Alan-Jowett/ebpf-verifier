@@ -194,6 +194,19 @@ TEST_CASE("linux builtin relocation resolver maps known libc builtins", "[platfo
     REQUIRE_FALSE(get_builtin_call(-999999).has_value());
 }
 
+TEST_CASE("linux ksym relocation resolver maps known kfunc symbols", "[platform][tables]") {
+    REQUIRE(g_ebpf_platform_linux.resolve_ksym_btf_id != nullptr);
+
+    const auto resolve = g_ebpf_platform_linux.resolve_ksym_btf_id;
+    const auto known = resolve("bpf_testmod_test_mod_kfunc");
+    REQUIRE(known.has_value());
+    REQUIRE(known->module == 1);
+    REQUIRE(known->btf_id > 0);
+
+    const auto unknown = resolve("__does_not_exist");
+    REQUIRE_FALSE(unknown.has_value());
+}
+
 TEST_CASE("helper prototypes with unmodeled ABI classes are conservatively rejected", "[platform][tables]") {
     ProgramInfo info{
         .platform = &g_ebpf_platform_linux,

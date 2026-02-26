@@ -8,6 +8,7 @@
 #include <iterator>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -118,6 +119,8 @@ class TempElfFile {
   private:
     std::filesystem::path path_;
 };
+
+std::optional<KsymBtfId> resolve_no_ksym_symbols(const std::string&) { return std::nullopt; }
 
 struct SectionHeaderInfo {
     unsigned char elf_class;
@@ -461,4 +464,46 @@ TEST_CASE("ELF loader rejects unsupported relocation types", "[elf][hardening]")
 
     REQUIRE_THROWS_WITH((ElfObject{elf.path().string(), {}, &g_ebpf_platform_linux}.get_programs(".text")),
                         Catch::Matchers::ContainsSubstring("Unsupported relocation type"));
+}
+
+TEST_CASE("ELF loader rewrites .ksyms function calls to call_btf", "[elf]") {
+    thread_local_options = {};
+
+    ElfObject elf{"ebpf-samples/cilium-ebpf/kfunc-kmod-el.elf", {}, &g_ebpf_platform_linux};
+    const auto& progs = elf.get_programs("tc", "call_kfunc");
+    REQUIRE(progs.size() == 1);
+
+    const auto resolver = g_ebpf_platform_linux.resolve_ksym_btf_id;
+    REQUIRE(resolver != nullptr);
+    const auto expected = resolver("bpf_testmod_test_mod_kfunc");
+    REQUIRE(expected.has_value());
+
+    const auto& instructions = progs[0].prog;
+    const auto call_it = std::find_if(instructions.begin(), instructions.end(),
+                                      [](const EbpfInst& inst) { return inst.opcode == INST_OP_CALL; });
+    REQUIRE(call_it != instructions.end());
+    REQUIRE(call_it->src == INST_CALL_BTF_HELPER);
+    REQUIRE(call_it->offset == expected->module);
+    REQUIRE(call_it->imm == expected->btf_id);
+}
+
+TEST_CASE("ELF loader fails unresolved .ksyms function calls before builtin fallback", "[elf]") {
+    thread_local_options = {};
+
+    ebpf_platform_t platform = g_ebpf_platform_linux;
+    platform.resolve_ksym_btf_id = resolve_no_ksym_symbols;
+
+    REQUIRE_THROWS_WITH((ElfObject{"ebpf-samples/cilium-ebpf/kfunc-kmod-el.elf", {}, &platform}.get_programs("tc")),
+                        Catch::Matchers::ContainsSubstring("Unresolved symbols found."));
+}
+
+TEST_CASE("ELF loader ignores non-function .ksyms entries", "[elf]") {
+    thread_local_options = {};
+
+    ebpf_platform_t platform = g_ebpf_platform_linux;
+    platform.resolve_ksym_btf_id = resolve_no_ksym_symbols;
+
+    ElfObject elf{"ebpf-samples/cilium-ebpf/ksym-el.elf", {}, &platform};
+    const auto& progs = elf.get_programs("socket", "ksym_test");
+    REQUIRE(progs.size() == 1);
 }

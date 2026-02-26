@@ -129,6 +129,7 @@ std::optional<uint64_t> resolve_known_linux_extern_symbol(std::string_view symbo
 EbpfInst make_mov_reg_nop(uint8_t reg);
 bool rewrite_extern_constant_load(std::vector<EbpfInst>& instructions, size_t location, uint64_t value);
 bool rewrite_extern_address_load_to_zero(std::vector<EbpfInst>& instructions, size_t location);
+bool rewrite_extern_kfunc_call(EbpfInst& instruction, const KsymBtfId& resolved_target);
 
 // ---------------------------------------------------------------------------
 // Map/global-data parsing (elf_map_parser.cpp)
@@ -156,6 +157,7 @@ class ProgramReader {
     const ElfGlobalData& global;
     std::vector<FunctionRelocation> function_relocations;
     std::set<std::pair<size_t, size_t>> function_relocation_index_;
+    std::map<std::string, std::optional<KsymBtfId>> ksym_function_resolution_cache;
     std::vector<unresolved_symbol_error_t> unresolved_symbol_errors;
     /// Only negative IDs are platform-internal builtins needing the gate;
     /// positive IDs are standard BPF helpers handled via normal prototype lookup.
@@ -174,6 +176,7 @@ class ProgramReader {
                                           std::reference_wrapper<EbpfInst> lo_inst) const;
     [[nodiscard]]
     bool has_function_relocation(size_t prog_index, size_t source_offset) const;
+    void build_ksym_function_resolution_cache();
     void enqueue_synthetic_local_calls(const std::vector<EbpfInst>& instructions, ELFIO::Elf_Half section_index,
                                        ELFIO::Elf_Xword program_offset);
 
@@ -193,8 +196,8 @@ class ProgramReader {
     int relocate_global_variable(const std::string& name) const;
 
     bool try_reloc(const std::string& symbol_name, ELFIO::Elf_Half symbol_section_index, unsigned char symbol_type,
-                   std::vector<EbpfInst>& instructions, size_t location, ELFIO::Elf_Word index,
-                   ELFIO::Elf_Sxword addend);
+                   unsigned char symbol_bind, std::vector<EbpfInst>& instructions, size_t location,
+                   ELFIO::Elf_Word index, ELFIO::Elf_Sxword addend);
     void process_relocations(std::vector<EbpfInst>& instructions, const ELFIO::const_relocation_section_accessor& reloc,
                              const std::string& section_name, ELFIO::Elf_Xword program_offset, size_t program_size);
     [[nodiscard]]
