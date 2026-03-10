@@ -703,7 +703,10 @@ struct Unmarshaller {
             if (!info.platform->is_helper_usable(inst.imm)) {
                 std::string name = std::to_string(inst.imm);
                 try {
-                    name = info.platform->get_helper_prototype(inst.imm).name;
+                    auto name_from_helper_prototype = info.platform->get_helper_prototype(inst.imm).name;
+                    if (name_from_helper_prototype) {
+                        name = info.platform->get_helper_prototype(inst.imm).name;
+                    }
                 } catch (const std::exception&) {
                 }
                 return Call{.func = inst.imm,
